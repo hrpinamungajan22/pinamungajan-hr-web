@@ -210,12 +210,7 @@ export async function findPhotoFrameCandidatesByVision(input: {
           score += bs * 3;
           reasons.push(`border:${bs.toFixed(2)}`);
 
-          // Prefer bottom-right placement.
           const c = centerOf(roi);
-          if (c.cx > 0.62 && c.cy > 0.55) {
-            score += 1.0;
-            reasons.push("br_bias");
-          }
 
           // Prefer above PHOTO label.
           if (input.photoLabelBox) {

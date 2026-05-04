@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -40,12 +42,18 @@ export async function GET(request: Request) {
       }
     } else {
       const rows = (data || []) as any[];
-      const total = rows.length > 0 ? Number(rows[0].total_count || 0) : 0;
+      const parsedTotal = rows.length > 0 ? Number(rows[0].total_count ?? NaN) : 0;
       const employees = rows.map((r) => {
         const { total_count, ...rest } = r;
         return rest;
       });
-      return NextResponse.json({ employees, total, page, pageSize });
+      if (employees.length === 0) {
+        return NextResponse.json({ employees: [], total: 0, page, pageSize });
+      }
+      if (Number.isFinite(parsedTotal) && parsedTotal > 0) {
+        return NextResponse.json({ employees, total: parsedTotal, page, pageSize });
+      }
+      // Rows returned but total_count missing or zero — fall through for an exact count + stable rows.
     }
   } catch {
     // ignore and fall back

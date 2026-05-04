@@ -10,12 +10,9 @@
       <stop offset="0%" stop-color="#b91c1c"/>
       <stop offset="100%" stop-color="#f87171"/>
     </linearGradient>
-    <filter id="sealShadow" x="-12%" y="-12%" width="124%" height="124%">
-      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.2"/>
-    </filter>
   </defs>
 
-  <circle cx="200" cy="200" r="190" fill="url(#sealBlue)" stroke="#ffffff" stroke-width="8" filter="url(#sealShadow)"/>
+  <circle cx="200" cy="200" r="190" fill="none" stroke="#1d4ed8" stroke-width="8"/>
 
   <circle cx="200" cy="200" r="140" fill="#ffffff" stroke="url(#sealRed)" stroke-width="12"/>
 

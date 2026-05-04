@@ -16,15 +16,14 @@ export type Page1Rois = {
 // Normalized ROIs (0..1) for CS Form No. 212 Revised 2025, page 1.
 // These values are intentionally conservative and should be refined using the official template PDF render.
 // They are designed to isolate the Personal Information name rows and avoid instruction/header text.
+// Coordinates derived from CS Form 212-2025 (letter, 8.5x11) remapped to legal (8.5x13)
+// via normalizeScanToLegal contain-fit: dy_norm=0.077 offset, scale=1.0, dx=0.
+// Name row (all 3 fields on SAME Y): y = 0.195*11/13 + 0.077 = 0.242
+// Layout: SURNAME | FIRST NAME | MIDDLE NAME are HORIZONTAL COLUMNS on row y≈0.242
 export const PDS2025_PAGE1_ROIS: Page1Rois = {
-  // Row 2. SURNAME value cell
-  surname: { x: 0.24, y: 0.165, w: 0.34, h: 0.035 },
-  // FIRST NAME value cell
-  first_name: { x: 0.24, y: 0.200, w: 0.34, h: 0.035 },
-  // MIDDLE NAME value cell
-  middle_name: { x: 0.24, y: 0.235, w: 0.34, h: 0.035 },
-  // NAME EXTENSION (JR, SR) small cell at right of the name table row area
-  name_extension: { x: 0.78, y: 0.200, w: 0.18, h: 0.035 },
-  // DATE OF BIRTH value cell (left block)
-  date_of_birth: { x: 0.24, y: 0.270, w: 0.18, h: 0.040 },
+  surname:        { x: 0.18, y: 0.222, w: 0.24, h: 0.040 },
+  first_name:     { x: 0.43, y: 0.222, w: 0.21, h: 0.040 },
+  middle_name:    { x: 0.72, y: 0.222, w: 0.12, h: 0.040 },
+  name_extension: { x: 0.85, y: 0.222, w: 0.10, h: 0.040 },
+  date_of_birth:  { x: 0.18, y: 0.270, w: 0.24, h: 0.040 },
 };

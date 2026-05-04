@@ -1,4 +1,5 @@
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
+import { assertServiceAccountJsonFileExists, normalizeEnvPath } from "@/lib/gcp/credentialsEnv";
 
 function readEnv(...keys: string[]) {
   for (const k of keys) {
@@ -71,7 +72,9 @@ export function getDocumentAiConfig() {
 
   // Local dev can use ADC via a file path, e.g. GOOGLE_APPLICATION_CREDENTIALS=C:\path\key.json
   // Note: Vercel cannot rely on local files, so production should use GCP_SERVICE_ACCOUNT_JSON.
-  const adcPath = readEnv("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALIALS");
+  const adcPathRaw = readEnv("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALIALS");
+  const adcPath = adcPathRaw ? normalizeEnvPath(adcPathRaw) : "";
+  if (!credentials && adcPath) assertServiceAccountJsonFileExists(adcPath, "GOOGLE_APPLICATION_CREDENTIALS");
 
   const projectIdFromEnv = readEnv("GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT");
   const projectId = projectIdFromEnv || String(credentials?.project_id || "").trim();
@@ -86,7 +89,7 @@ export function getDocumentAiConfig() {
   if (!projectId) missing.push("GCP_PROJECT_ID");
   if (!location) missing.push("DOCUMENT_AI_LOCATION");
   if (!processorId) missing.push("DOCUMENT_AI_PROCESSOR_ID");
-  if (!credentials && !adcPath) missing.push("GCP_SERVICE_ACCOUNT_JSON");
+  if (!credentials && !adcPath) missing.push("GCP_SERVICE_ACCOUNT_JSON (or GOOGLE_APPLICATION_CREDENTIALS file path)");
   if (missing.length) {
     throw new Error(`Missing ${missing.join(", ")}`);
   }
@@ -103,8 +106,8 @@ export function createDocumentAiClient() {
   // Use ADC (GOOGLE_APPLICATION_CREDENTIALS) if provided.
   if (cfg.adcPath && !String(process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim()) {
     // If the user set the common misspelling GOOGLE_APPLICATION_CREDENTIALIALS,
-    // mirror it into the correct env var so Google auth can discover it.
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = cfg.adcPath;
+    // mirror it into the correct env var so Google auth can discover it (normalized path).
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = normalizeEnvPath(cfg.adcPath);
   }
   console.log("[DEBUG DOC-AI] Creating client with ADC");
   return new DocumentProcessorServiceClient({ projectId: cfg.projectId });

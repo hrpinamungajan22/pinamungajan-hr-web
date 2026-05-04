@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { computeAgeAndGroupFromDobIso } from "@/lib/age";
 import { revalidatePath } from "next/cache";
-import { isAdminUser } from "@/lib/auth/roles";
+import { canAccessReviewQueue } from "@/lib/auth/roles";
 
 function normalizeNameForMatch(s: string) {
   return String(s || "")
@@ -37,6 +37,7 @@ function looksLikeSamePersonLoose(a: any, b: any) {
 }
 
 export async function POST(request: Request) {
+  try {
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
   if (userError || !user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
-  if (!isAdminUser(user)) {
+  if (!canAccessReviewQueue(user)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
@@ -101,19 +102,32 @@ export async function POST(request: Request) {
     return new NextResponse(docErr?.message || "Document not found", { status: 404 });
   }
 
-  const owner = (extraction as any)?.raw_extracted_json?.owner_candidate || {};
-  const appointmentDataFromColumn = (extraction as any)?.appointment_data;
-  
-  console.log("[DEBUG COMMIT] Owner candidate:", owner);
-  console.log("[DEBUG COMMIT] Appointment data from column:", appointmentDataFromColumn);
-  
+  const rawJson = ((extraction as any)?.raw_extracted_json || {}) as any;
+  const appointmentData = rawJson?.appointment_data || (extraction as any)?.appointment_data || {};
+  const ownerFromRaw = rawJson?.owner_candidate || {};
+  const ownerFromAppt = appointmentData?.owner || {};
+
   const ownerCandidate = {
-    last_name: String(owner.last_name || "").trim(),
-    first_name: String(owner.first_name || "").trim(),
-    middle_name: String(owner.middle_name || "").trim() || null,
-    name_extension: owner.name_extension ? String(owner.name_extension).trim() : null,
-    date_of_birth: owner.date_of_birth ? String(owner.date_of_birth).trim() : null, // ISO expected
-    gender: owner.gender ? String(owner.gender).trim() : null,
+    last_name: String(ownerFromRaw.last_name || ownerFromAppt.last_name || "").trim(),
+    first_name: String(ownerFromRaw.first_name || ownerFromAppt.first_name || "").trim(),
+    middle_name:
+      ownerFromRaw.middle_name || ownerFromAppt.middle_name
+        ? String(ownerFromRaw.middle_name || ownerFromAppt.middle_name || "").trim() || null
+        : null,
+    name_extension: ownerFromRaw.name_extension
+      ? String(ownerFromRaw.name_extension).trim()
+      : ownerFromAppt.name_extension
+        ? String(ownerFromAppt.name_extension).trim()
+        : null,
+    date_of_birth:
+      ownerFromRaw.date_of_birth || ownerFromAppt.date_of_birth
+        ? String(ownerFromRaw.date_of_birth || ownerFromAppt.date_of_birth || "").trim() || null
+        : null,
+    gender: ownerFromRaw.gender
+      ? String(ownerFromRaw.gender).trim()
+      : ownerFromAppt.gender
+        ? String(ownerFromAppt.gender).trim()
+        : null,
   };
 
   if (!ownerCandidate.last_name || !ownerCandidate.first_name) {
@@ -129,39 +143,84 @@ export async function POST(request: Request) {
   const alreadyLinked = doc.employee_id ? String(doc.employee_id) : null;
   const primaryEmployeeId = alreadyLinked || null;
 
+  const patchCommittedExtraction = (employeeId: string) =>
+    ({
+      status: "committed" as const,
+      raw_extracted_json: {
+        ...(extraction as any).raw_extracted_json,
+        owner_employee_id: employeeId,
+      },
+      linked_employee_id: employeeId,
+      updated_by: user.id,
+    }) as Record<string, unknown>;
+
   // Helper: Link ALL documents in the same document_set/batch to the employee
   const linkAllDocs = async (employeeId: string) => {
-    const setId = (extraction as any)?.document_set_id;
-    const batchId = (extraction as any)?.batch_id;
+    const setId = (extraction as any)?.document_set_id as string | null | undefined;
+    const batchId = (extraction as any)?.batch_id as string | null | undefined;
 
-    if (!setId && !batchId) {
-      // Just link the single document
-      await supabase.from("employee_documents").update({ employee_id: employeeId }).eq("id", doc.id);
+    // Always link the anchor document for this extraction (commit must not rely on sibling query alone).
+    const { error: anchorDocErr } = await supabase
+      .from("employee_documents")
+      .update({ employee_id: employeeId })
+      .eq("id", doc.id);
+
+    if (anchorDocErr) {
+      console.error("[COMMIT] link anchor employee_document failed:", anchorDocErr);
+      throw new Error(anchorDocErr.message || "Failed to link document to employee");
+    }
+
+    const siblingOr: string[] = [];
+    if (setId) siblingOr.push(`document_set_id.eq.${setId}`);
+    if (batchId) siblingOr.push(`batch_id.eq.${batchId}`);
+
+    if (siblingOr.length === 0) {
+      const { error: loneExErr } = await supabase
+        .from("extractions")
+        .update({ linked_employee_id: employeeId } as any)
+        .eq("id", extractionId);
+      if (loneExErr) console.error("[COMMIT] linked_employee_id update failed:", loneExErr);
       return;
     }
 
-    // Find all unlinked documents in the same set/batch
-    let query = supabase.from("employee_documents").select("id").is("employee_id", null);
-    if (setId) query = query.eq("document_set_id", setId);
-    if (batchId) query = query.eq("batch_id", batchId);
+    // Siblings: same document set OR same batch (AND was too strict when one FK is null or IDs differ).
+    const { data: relatedDocs, error: sibErr } = await supabase
+      .from("employee_documents")
+      .select("id")
+      .is("employee_id", null)
+      .neq("id", doc.id)
+      .or(siblingOr.join(","));
 
-    const { data: relatedDocs } = await query;
-    const docIds = relatedDocs?.map((d: any) => d.id) || [];
-
-    if (docIds.length > 0) {
-      await supabase.from("employee_documents").update({ employee_id: employeeId }).in("id", docIds);
+    if (sibErr) {
+      console.error("[COMMIT] sibling documents query failed:", sibErr);
+    } else {
+      const sibIds = (relatedDocs || []).map((d: any) => d.id).filter(Boolean);
+      if (sibIds.length > 0) {
+        const { error: sibUpErr } = await supabase
+          .from("employee_documents")
+          .update({ employee_id: employeeId })
+          .in("id", sibIds);
+        if (sibUpErr) console.error("[COMMIT] link sibling documents failed:", sibUpErr);
+      }
     }
 
-    // Also update all related extractions
     try {
-      let exQuery = supabase.from("extractions").select("id");
-      if (setId) exQuery = exQuery.eq("document_set_id", setId);
-      if (batchId) exQuery = exQuery.eq("batch_id", batchId);
-      const { data: relatedEx } = await exQuery;
-      if (relatedEx && relatedEx.length > 0) {
-        await supabase.from("extractions").update({ linked_employee_id: employeeId } as any).in("id", relatedEx.map((e: any) => e.id));
+      const { data: relatedEx, error: exQErr } = await supabase.from("extractions").select("id").or(siblingOr.join(","));
+      if (exQErr) {
+        console.error("[COMMIT] related extractions query failed:", exQErr);
+      } else {
+        const exIds = [...new Set([...(relatedEx || []).map((e: any) => e.id), extractionId])].filter(Boolean);
+        if (exIds.length > 0) {
+          const { error: exUpErr } = await supabase
+            .from("extractions")
+            .update({ linked_employee_id: employeeId } as any)
+            .in("id", exIds);
+          if (exUpErr) console.error("[COMMIT] link related extractions failed:", exUpErr);
+        }
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.error("[COMMIT] related extractions update:", e);
+    }
   };
 
   // Helper: Save appointment fields to employee record
@@ -227,17 +286,7 @@ export async function POST(request: Request) {
     await saveAppointmentFields(chosenEmployeeId);
 
     // Mark committed.
-    await supabase
-      .from("extractions")
-      .update({
-        status: "committed",
-        raw_extracted_json: {
-          ...(extraction as any).raw_extracted_json,
-          owner_employee_id: chosenEmployeeId,
-        },
-        updated_by: user.id,
-      })
-      .eq("id", extractionId);
+    await supabase.from("extractions").update(patchCommittedExtraction(chosenEmployeeId)).eq("id", extractionId);
 
     try {
       revalidatePath("/masterlist");
@@ -286,17 +335,7 @@ export async function POST(request: Request) {
       }
     }
 
-    await supabase
-      .from("extractions")
-      .update({
-        status: "committed",
-        raw_extracted_json: {
-          ...(extraction as any).raw_extracted_json,
-          owner_employee_id: primaryEmployeeId,
-        },
-        updated_by: user.id,
-      })
-      .eq("id", extractionId);
+    await supabase.from("extractions").update(patchCommittedExtraction(primaryEmployeeId)).eq("id", extractionId);
 
     try {
       revalidatePath("/masterlist");
@@ -352,17 +391,7 @@ export async function POST(request: Request) {
       await linkAllDocs(targetId);
       await saveAppointmentFields(targetId);
 
-      await supabase
-        .from("extractions")
-        .update({
-          status: "committed",
-          raw_extracted_json: {
-            ...(extraction as any).raw_extracted_json,
-            owner_employee_id: targetId,
-          },
-          updated_by: user.id,
-        })
-        .eq("id", extractionId);
+      await supabase.from("extractions").update(patchCommittedExtraction(targetId)).eq("id", extractionId);
 
       try {
         revalidatePath("/masterlist");
@@ -374,27 +403,59 @@ export async function POST(request: Request) {
     }
   }
 
-  // If there are possible matches, auto-link to the first one for appointments
-  // or require confirmation for PDS documents
-  if (possible.length > 0) {
-    // For appointment documents, auto-link to the first matching candidate
-    // since we don't create new employees from appointments
-    const targetId = String(possible[0].id);
-    
-    await linkAllDocs(targetId);
-    await saveAppointmentFields(targetId);
-
-    await supabase
-      .from("extractions")
-      .update({
-        status: "committed",
-        raw_extracted_json: {
-          ...(extraction as any).raw_extracted_json,
-          owner_employee_id: targetId,
+  // One plausible name match but owner has no DOB: require explicit confirmation (UI sends employee_id).
+  if (!dobIso && possible.length === 1 && !forceCreateNew) {
+    const c = possible[0];
+    return NextResponse.json({
+      needs_confirmation: true,
+      reason: "dob_missing",
+      candidates: [
+        {
+          id: String(c.id),
+          last_name: c.last_name,
+          first_name: c.first_name,
+          middle_name: c.middle_name ?? null,
+          date_of_birth: c.date_of_birth ?? null,
         },
+      ],
+    });
+  }
+
+  const docTypeFinal = String((extraction as any).doc_type_final || "").toLowerCase();
+  const isAppointment = docTypeFinal === "appointment";
+
+  // Explicit new record (even when similar names exist): user chose from confirmation UI.
+  if (forceCreateNew && !isAppointment) {
+    const dobForAge = ownerCandidate.date_of_birth || null;
+    const computedAge = dobForAge ? computeAgeAndGroupFromDobIso(dobForAge) : { age: null as number | null, age_group: null as string | null };
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from("employees")
+      .insert({
+        last_name: ownerCandidate.last_name,
+        first_name: ownerCandidate.first_name,
+        middle_name: ownerCandidate.middle_name || null,
+        name_extension: ownerCandidate.name_extension || null,
+        date_of_birth: dobForAge,
+        gender: ownerCandidate.gender || null,
+        age: computedAge.age,
+        age_group: computedAge.age_group,
+        created_by: user.id,
         updated_by: user.id,
       })
-      .eq("id", extractionId);
+      .select("id")
+      .single();
+
+    if (insertErr || !inserted?.id) {
+      console.error("[COMMIT] insert employee (force new) failed:", insertErr);
+      return new NextResponse(insertErr?.message || "Failed to create employee record", { status: 400 });
+    }
+
+    const newId = String(inserted.id);
+    await linkAllDocs(newId);
+    await saveAppointmentFields(newId);
+
+    await supabase.from("extractions").update(patchCommittedExtraction(newId)).eq("id", extractionId);
 
     try {
       revalidatePath("/masterlist");
@@ -402,13 +463,94 @@ export async function POST(request: Request) {
       // ignore
     }
 
-    return NextResponse.json({ ok: true, employee_id: targetId, action: "linked" });
+    return NextResponse.json({ ok: true, employee_id: newId, action: "created_new_forced" });
   }
 
-  // If no candidates found, return error instead of creating new employee
-  // Appointments should only update existing PDS records
-  return new NextResponse(
-    "No matching employee found in masterlist. Please ensure the employee has a PDS document uploaded and processed first.",
-    { status: 400 }
-  );
+  // Several plausible matches: ask HR to pick one (UI sends employee_id on retry).
+  if (possible.length > 1 && !forceCreateNew) {
+    return NextResponse.json({
+      needs_confirmation: true,
+      reason: "multiple_matches",
+      candidates: possible.map((c: any) => ({
+        id: String(c.id),
+        last_name: c.last_name,
+        first_name: c.first_name,
+        middle_name: c.middle_name ?? null,
+        date_of_birth: c.date_of_birth ?? null,
+      })),
+    });
+  }
+
+  // Single existing match → link (safe default).
+  if (possible.length === 1 && !forceCreateNew) {
+    const targetId = String(possible[0].id);
+
+    await linkAllDocs(targetId);
+    await saveAppointmentFields(targetId);
+
+    await supabase.from("extractions").update(patchCommittedExtraction(targetId)).eq("id", extractionId);
+
+    try {
+      revalidatePath("/masterlist");
+    } catch {
+      // ignore
+    }
+
+    return NextResponse.json({ ok: true, employee_id: targetId, action: "linked_existing" });
+  }
+
+  // No matches: appointments cannot invent net-new employees from this flow.
+  if (isAppointment) {
+    return new NextResponse(
+      "No matching employee found. Appointment documents update existing masterlist rows—upload and commit a PDS first, search for the employee above, or confirm duplicate handling.",
+      { status: 400 }
+    );
+  }
+
+  // No matches (PDS / other): create the employee row so Masterlist is populated.
+  {
+    const dobForAge = ownerCandidate.date_of_birth || null;
+    const computedAge = dobForAge ? computeAgeAndGroupFromDobIso(dobForAge) : { age: null as number | null, age_group: null as string | null };
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from("employees")
+      .insert({
+        last_name: ownerCandidate.last_name,
+        first_name: ownerCandidate.first_name,
+        middle_name: ownerCandidate.middle_name || null,
+        name_extension: ownerCandidate.name_extension || null,
+        date_of_birth: dobForAge,
+        gender: ownerCandidate.gender || null,
+        age: computedAge.age,
+        age_group: computedAge.age_group,
+        created_by: user.id,
+        updated_by: user.id,
+      })
+      .select("id")
+      .single();
+
+    if (insertErr || !inserted?.id) {
+      console.error("[COMMIT] insert employee failed:", insertErr);
+      return new NextResponse(insertErr?.message || "Failed to create employee record", { status: 400 });
+    }
+
+    const newId = String(inserted.id);
+    await linkAllDocs(newId);
+    await saveAppointmentFields(newId);
+
+    await supabase.from("extractions").update(patchCommittedExtraction(newId)).eq("id", extractionId);
+
+    try {
+      revalidatePath("/masterlist");
+    } catch {
+      // ignore
+    }
+
+    return NextResponse.json({ ok: true, employee_id: newId, action: "created" });
+  }
+  } catch (e) {
+    console.error("[COMMIT] failed:", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    return new NextResponse(msg || "Commit failed", { status: 400 });
+  }
 }

@@ -385,17 +385,17 @@ export function ExtractedPhotoPanel({
   }
 
   return (
-    <div className="rounded-xl border bg-white p-4 shadow-sm">
+    <div className="app-card p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <div className="text-sm font-semibold text-slate-900">Extracted ID Photo</div>
-          <div className="mt-0.5 text-[11px] text-slate-700">{headerMeta || "Run OCR to attempt extraction."}</div>
+          <div className="text-sm font-semibold text-app-text">Extracted ID Photo</div>
+          <div className="mt-0.5 text-[11px] text-app-muted">{headerMeta || "Run OCR to attempt extraction."}</div>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={!canDebug}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold ${canDebug ? "bg-slate-100 text-slate-900 hover:bg-slate-200" : "bg-slate-50 text-slate-400"}`}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold ${canDebug ? "bg-app-surface-muted text-app-text hover:bg-app-border" : "bg-app-surface-muted text-app-muted"}`}
             onClick={() => {
               downloadDebugOverlay().catch((e) => {
                 setState((s) => ({ status: "error", message: e instanceof Error ? e.message : String(e), signedUrl: s.signedUrl }));
@@ -407,8 +407,8 @@ export function ExtractedPhotoPanel({
           <button
             type="button"
             disabled={!canSave || state.status === "saving"}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white ${
-              canSave && state.status !== "saving" ? "bg-emerald-700 hover:bg-emerald-800" : "bg-slate-300"
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
+              canSave && state.status !== "saving" ? "bg-app-success text-app-on-primary hover:opacity-90" : "bg-app-surface-muted text-app-muted"
             }`}
             onClick={save}
           >
@@ -419,8 +419,8 @@ export function ExtractedPhotoPanel({
             disabled={!canManualSave || state.status === "saving"}
             className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
               canManualSave && state.status !== "saving"
-                ? "bg-indigo-700 text-white hover:bg-indigo-800"
-                : "bg-slate-100 text-slate-400"
+                ? "bg-app-primary text-app-on-primary hover:bg-app-primary-hover"
+                : "bg-app-surface-muted text-app-muted"
             }`}
             onClick={() => setEditOpen((v) => !v)}
           >
@@ -435,7 +435,7 @@ export function ExtractedPhotoPanel({
             // eslint-disable-next-line @next/next/no-img-element
             <img src={state.signedUrl} alt="Extracted ID photo" className="h-40 w-40 rounded-lg border object-cover" />
           ) : (
-            <div className="flex h-40 w-40 items-center justify-center rounded-lg border bg-slate-50 text-xs text-slate-500">
+            <div className="flex h-40 w-40 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-xs text-app-muted">
               {canPreview ? "Loading…" : "No extracted photo"}
             </div>
           )}
@@ -443,11 +443,11 @@ export function ExtractedPhotoPanel({
 
         <div className="flex-1">
           {!employeeId ? (
-            <div className="text-xs text-amber-800">Link/commit an employee first to enable saving the extracted photo.</div>
+            <div className="text-xs text-app-warning">Link/commit an employee first to enable saving the extracted photo.</div>
           ) : null}
 
           {warnings.length > 0 ? (
-            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+            <div className="mt-2 rounded-md border border-app-warning/35 bg-app-warning-muted px-2 py-1 text-[11px] text-app-warning">
               {warnings.slice(0, 6).map((w, i) => (
                 <div key={i}>{String(w)}</div>
               ))}
@@ -455,23 +455,23 @@ export function ExtractedPhotoPanel({
           ) : null}
 
           {state.status === "error" ? (
-            <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-800">
+            <div className="mt-2 rounded-md border border-app-danger/35 bg-app-danger-muted px-2 py-1 text-[11px] text-app-danger">
               {state.message}
             </div>
           ) : null}
 
           {state.status === "saved" ? (
-            <div className="mt-2 text-xs font-semibold text-emerald-800">Saved to employee.</div>
+            <div className="mt-2 text-xs font-semibold text-app-success">Saved to employee.</div>
           ) : null}
 
           {!faceDetected && storedPath ? (
-            <div className="mt-2 text-[11px] text-slate-700">Face check failed; auto-save is disabled.</div>
+            <div className="mt-2 text-[11px] text-app-muted">Face check failed; auto-save is disabled.</div>
           ) : null}
 
           {editOpen ? (
-            <div className="mt-3 rounded-lg border bg-slate-50 p-3">
-              <div className="text-xs font-semibold text-slate-900">Manual crop</div>
-              <div className="mt-1 text-[11px] text-slate-700">
+            <div className="mt-3 rounded-lg border border-app-border bg-app-surface-muted p-3">
+              <div className="text-xs font-semibold text-app-text">Manual crop</div>
+              <div className="mt-1 text-[11px] text-app-muted">
                 {cropMode === "passport" 
                   ? "Drag the box to position over the face. Size is fixed (35x45mm passport ratio)." 
                   : "Drag to move, resize using handles."} Then save to override the Masterlist photo.
@@ -479,7 +479,7 @@ export function ExtractedPhotoPanel({
 
               {/* Mode switcher and zoom */}
               <div className="mt-3 flex items-center gap-3">
-                <div className="flex items-center gap-1 rounded-md border bg-white p-1">
+                <div className="flex items-center gap-1 rounded-md border border-app-border bg-app-surface p-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -488,7 +488,7 @@ export function ExtractedPhotoPanel({
                       setRoi(clampBox({ x: roi.x, y: roi.y, w: PASSPORT_W_NORM, h: PASSPORT_H_NORM }));
                     }}
                     className={`rounded px-2 py-1 text-[11px] font-medium ${
-                      cropMode === "passport" ? "bg-indigo-100 text-indigo-700" : "text-slate-600 hover:bg-slate-100"
+                      cropMode === "passport" ? "bg-app-primary/15 text-app-primary" : "text-app-muted hover:bg-app-surface-muted"
                     }`}
                   >
                     Passport (35×45)
@@ -497,7 +497,7 @@ export function ExtractedPhotoPanel({
                     type="button"
                     onClick={() => setCropMode("free")}
                     className={`rounded px-2 py-1 text-[11px] font-medium ${
-                      cropMode === "free" ? "bg-indigo-100 text-indigo-700" : "text-slate-600 hover:bg-slate-100"
+                      cropMode === "free" ? "bg-app-primary/15 text-app-primary" : "text-app-muted hover:bg-app-surface-muted"
                     }`}
                   >
                     Free resize
@@ -507,15 +507,15 @@ export function ExtractedPhotoPanel({
                   <button
                     type="button"
                     onClick={() => setZoom(z => Math.max(0.5, z - 0.25))}
-                    className="rounded border bg-white px-2 py-1 text-xs hover:bg-slate-50"
+                    className="rounded border border-app-border bg-app-surface px-2 py-1 text-xs text-app-text hover:bg-app-surface-muted"
                   >
                     −
                   </button>
-                  <span className="text-[11px] text-slate-600">{Math.round(zoom * 100)}%</span>
+                  <span className="text-[11px] text-app-muted">{Math.round(zoom * 100)}%</span>
                   <button
                     type="button"
                     onClick={() => setZoom(z => Math.min(3, z + 0.25))}
-                    className="rounded border bg-white px-2 py-1 text-xs hover:bg-slate-50"
+                    className="rounded border border-app-border bg-app-surface px-2 py-1 text-xs text-app-text hover:bg-app-surface-muted"
                   >
                     +
                   </button>
@@ -523,7 +523,7 @@ export function ExtractedPhotoPanel({
               </div>
 
               <div className="mt-3">
-                <div className="text-[11px] font-semibold text-slate-900">
+                <div className="text-[11px] font-semibold text-app-text">
                   {cropMode === "passport" ? "Drag to position" : "Drag to move / resize"}
                 </div>
                 
@@ -534,7 +534,7 @@ export function ExtractedPhotoPanel({
                   {/* Crop area */}
                   <div
                     ref={previewWrapRef}
-                    className="relative overflow-hidden rounded-lg border bg-white"
+                    className="relative overflow-hidden rounded-lg border border-app-border bg-app-surface"
                     style={{ maxWidth: 360, height: Math.round(360 * (13/8.5) * zoom), overflow: "auto" }}
                     onPointerMove={onDragMove}
                     onPointerUp={endDrag}
@@ -552,16 +552,16 @@ export function ExtractedPhotoPanel({
                         onLoad={updateLivePreview}
                       />
                     ) : previewError ? (
-                      <div className="flex aspect-[8.5/13] w-full items-center justify-center p-4 text-center text-xs text-rose-700">
+                      <div className="flex aspect-[8.5/13] w-full items-center justify-center p-4 text-center text-xs text-app-danger">
                         {previewError}
                       </div>
                     ) : (
-                      <div className="flex aspect-[8.5/13] w-full items-center justify-center text-xs text-slate-600">Loading preview…</div>
+                      <div className="flex aspect-[8.5/13] w-full items-center justify-center text-xs text-app-muted">Loading preview…</div>
                     )}
 
                     <div
                       role="presentation"
-                      className="absolute border-2 border-indigo-600 bg-indigo-500/10"
+                      className="absolute border-2 border-app-primary bg-app-primary/10"
                       style={{
                         left: `${roi.x * 100}%`,
                         top: `${roi.y * 100}%`,
@@ -574,7 +574,7 @@ export function ExtractedPhotoPanel({
                       {cropMode === "free" && (
                         <>
                           <div
-                            className="absolute -left-1.5 -top-1.5 h-3 w-3 rounded-sm border border-indigo-700 bg-white"
+                            className="absolute -left-1.5 -top-1.5 h-3 w-3 rounded-sm border border-app-primary bg-app-surface"
                             style={{ cursor: "nwse-resize" }}
                             onPointerDown={(ev) => {
                               ev.stopPropagation();
@@ -582,7 +582,7 @@ export function ExtractedPhotoPanel({
                             }}
                           />
                           <div
-                            className="absolute -right-1.5 -top-1.5 h-3 w-3 rounded-sm border border-indigo-700 bg-white"
+                            className="absolute -right-1.5 -top-1.5 h-3 w-3 rounded-sm border border-app-primary bg-app-surface"
                             style={{ cursor: "nesw-resize" }}
                             onPointerDown={(ev) => {
                               ev.stopPropagation();
@@ -590,7 +590,7 @@ export function ExtractedPhotoPanel({
                             }}
                           />
                           <div
-                            className="absolute -left-1.5 -bottom-1.5 h-3 w-3 rounded-sm border border-indigo-700 bg-white"
+                            className="absolute -left-1.5 -bottom-1.5 h-3 w-3 rounded-sm border border-app-primary bg-app-surface"
                             style={{ cursor: "nesw-resize" }}
                             onPointerDown={(ev) => {
                               ev.stopPropagation();
@@ -598,7 +598,7 @@ export function ExtractedPhotoPanel({
                             }}
                           />
                           <div
-                            className="absolute -right-1.5 -bottom-1.5 h-3 w-3 rounded-sm border border-indigo-700 bg-white"
+                            className="absolute -right-1.5 -bottom-1.5 h-3 w-3 rounded-sm border border-app-primary bg-app-surface"
                             style={{ cursor: "nwse-resize" }}
                             onPointerDown={(ev) => {
                               ev.stopPropagation();
@@ -612,7 +612,7 @@ export function ExtractedPhotoPanel({
 
                   {/* Live preview thumbnail */}
                   <div className="flex flex-col items-center">
-                    <div className="text-[10px] font-semibold text-slate-700 mb-1">Live Preview</div>
+                    <div className="text-[10px] font-semibold text-app-muted mb-1">Live Preview</div>
                     {livePreviewUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img 
@@ -627,11 +627,11 @@ export function ExtractedPhotoPanel({
                         }}
                       />
                     ) : (
-                      <div className="flex h-24 w-24 items-center justify-center rounded-lg border bg-slate-100 text-[10px] text-slate-500">
+                      <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-[10px] text-app-muted">
                         No preview
                       </div>
                     )}
-                    <div className="mt-1 text-[9px] text-slate-500">
+                    <div className="mt-1 text-[9px] text-app-muted">
                       {Math.round(roi.w * 100)}% × {Math.round(roi.h * 100)}%
                     </div>
                   </div>
@@ -639,10 +639,10 @@ export function ExtractedPhotoPanel({
               </div>
 
               <div className="mt-2 grid grid-cols-4 gap-2">
-                <label className="text-[11px] text-slate-800">
+                <label className="text-[11px] text-app-text">
                   X
                   <input
-                    className="mt-1 w-full rounded-md border bg-white px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded-md border border-app-border bg-app-surface px-2 py-1 text-xs text-app-text"
                     value={roi.x.toFixed(3)}
                     type="number"
                     step="0.001"
@@ -651,10 +651,10 @@ export function ExtractedPhotoPanel({
                     onChange={(e) => setRoi((r: NormBox) => clampBox({ ...r, x: Number(e.target.value) }))}
                   />
                 </label>
-                <label className="text-[11px] text-slate-800">
+                <label className="text-[11px] text-app-text">
                   Y
                   <input
-                    className="mt-1 w-full rounded-md border bg-white px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded-md border border-app-border bg-app-surface px-2 py-1 text-xs text-app-text"
                     value={roi.y.toFixed(3)}
                     type="number"
                     step="0.001"
@@ -663,10 +663,10 @@ export function ExtractedPhotoPanel({
                     onChange={(e) => setRoi((r: NormBox) => clampBox({ ...r, y: Number(e.target.value) }))}
                   />
                 </label>
-                <label className="text-[11px] text-slate-800">
+                <label className="text-[11px] text-app-text">
                   W
                   <input
-                    className="mt-1 w-full rounded-md border bg-white px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded-md border border-app-border bg-app-surface px-2 py-1 text-xs text-app-text"
                     value={roi.w.toFixed(3)}
                     type="number"
                     step="0.001"
@@ -676,10 +676,10 @@ export function ExtractedPhotoPanel({
                     onChange={(e) => setRoi((r: NormBox) => clampBox({ ...r, w: Number(e.target.value) }))}
                   />
                 </label>
-                <label className="text-[11px] text-slate-800">
+                <label className="text-[11px] text-app-text">
                   H
                   <input
-                    className="mt-1 w-full rounded-md border bg-white px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded-md border border-app-border bg-app-surface px-2 py-1 text-xs text-app-text"
                     value={roi.h.toFixed(3)}
                     type="number"
                     step="0.001"
@@ -695,14 +695,14 @@ export function ExtractedPhotoPanel({
                 <button
                   type="button"
                   disabled={!canManualSave || state.status === "saving"}
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white ${
-                    canManualSave && state.status !== "saving" ? "bg-indigo-700 hover:bg-indigo-800" : "bg-slate-300"
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
+                    canManualSave && state.status !== "saving" ? "bg-app-primary text-app-on-primary hover:bg-app-primary-hover" : "bg-app-surface-muted text-app-muted"
                   }`}
                   onClick={saveAdjusted}
                 >
                   Save adjusted photo
                 </button>
-                <span className="text-[11px] text-slate-700">This will replace the Masterlist photo.</span>
+                <span className="text-[11px] text-app-muted">This will replace the Masterlist photo.</span>
               </div>
             </div>
           ) : null}

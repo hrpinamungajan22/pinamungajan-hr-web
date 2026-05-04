@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 
-export function DebugExtractionPanel({ 
-  rawExtractedJson, 
-  documentType, 
-  appointmentData, 
-  extractionDebug 
-}: { 
+export function DebugExtractionPanel({
+  rawExtractedJson,
+  documentType,
+  appointmentData,
+  extractionDebug,
+}: {
   rawExtractedJson: any;
   documentType: string | null;
   appointmentData: any;
@@ -22,44 +22,44 @@ export function DebugExtractionPanel({
   const sexDebug = rawExtractedJson?.debug?.sex;
 
   return (
-    <div className="rounded-xl border bg-white p-4 shadow-sm">
+    <div className="app-card p-4">
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="flex w-full items-center justify-between text-left"
       >
-        <div className="text-sm font-semibold text-slate-900">Debug / Diagnostics</div>
-        <div className="text-xs text-slate-600">
-          {isOpen ? "Hide ▼" : "Show ▶"}
-        </div>
+        <div className="text-sm font-semibold text-app-text">Debug / Diagnostics</div>
+        <div className="text-xs text-app-muted">{isOpen ? "Hide ▼" : "Show ▶"}</div>
       </button>
 
       {isOpen && (
         <div className="mt-4 space-y-4">
-          {/* Document Type Detection */}
-          <div className="rounded-lg bg-slate-50 p-3">
-            <div className="text-xs font-semibold text-slate-900">Document Type Detection</div>
+          <div className="rounded-lg bg-app-surface-muted p-3 ring-1 ring-app-border/45">
+            <div className="text-xs font-semibold text-app-text">Document Type Detection</div>
             <div className="mt-2 grid gap-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-600">Detected Type:</span>
-                <span className="font-medium">{documentType || "unknown"}</span>
+              <div className="flex justify-between gap-2">
+                <span className="text-app-muted">Detected Type:</span>
+                <span className="font-medium capitalize text-app-primary">{documentType || "unknown"}</span>
               </div>
               {detectionDebug && (
                 <>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Confidence:</span>
-                    <span className="font-medium">{Math.round(detectionDebug.confidence * 100)}%</span>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-app-muted">Confidence:</span>
+                    <span className="font-medium text-app-text">{Math.round(detectionDebug.confidence * 100)}%</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Stage:</span>
-                    <span className="font-medium">{detectionDebug.evidence?.stage}</span>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-app-muted">Stage:</span>
+                    <span className="font-medium text-app-text">{detectionDebug.evidence?.stage}</span>
                   </div>
                   {detectionDebug.evidence?.matched && detectionDebug.evidence.matched.length > 0 && (
                     <div>
-                      <span className="text-slate-600">Matched Phrases:</span>
+                      <span className="text-app-muted">Matched Phrases:</span>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {detectionDebug.evidence.matched.map((phrase: string) => (
-                          <span key={phrase} className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-700">
+                          <span
+                            key={phrase}
+                            className="rounded-md bg-app-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-app-primary"
+                          >
                             {phrase}
                           </span>
                         ))}
@@ -68,8 +68,8 @@ export function DebugExtractionPanel({
                   )}
                   {detectionDebug.evidence?.scores && (
                     <div>
-                      <span className="text-slate-600">All Scores:</span>
-                      <pre className="mt-1 max-h-[100px] overflow-auto rounded bg-white p-2 text-[10px]">
+                      <span className="text-app-muted">All Scores:</span>
+                      <pre className="mt-1 max-h-[100px] overflow-auto rounded-lg border border-app-border bg-app-bg p-2 text-[10px] text-app-text">
                         {JSON.stringify(detectionDebug.evidence.scores, null, 2)}
                       </pre>
                     </div>
@@ -79,27 +79,25 @@ export function DebugExtractionPanel({
             </div>
           </div>
 
-          {/* Appointment Data (if applicable) */}
           {appointmentData && (
-            <div className="rounded-lg bg-green-50 p-3">
-              <div className="text-xs font-semibold text-green-900">Extracted Appointment Data</div>
-              <pre className="mt-2 max-h-[200px] overflow-auto rounded bg-white p-2 text-[10px]">
+            <div className="rounded-lg border border-app-success/35 bg-app-success-muted p-3">
+              <div className="text-xs font-semibold text-app-success">Extracted Appointment Data</div>
+              <pre className="mt-2 max-h-[200px] overflow-auto rounded-lg border border-app-border bg-app-bg p-2 text-[10px] text-app-text">
                 {JSON.stringify(appointmentData, null, 2)}
               </pre>
             </div>
           )}
 
-          {/* Owner Extraction */}
           {ownerDebug && (
-            <div className="rounded-lg bg-blue-50 p-3">
-              <div className="text-xs font-semibold text-blue-900">Owner Extraction</div>
+            <div className="rounded-lg border border-app-primary/25 bg-app-primary/5 p-3">
+              <div className="text-xs font-semibold text-app-text">Owner Extraction</div>
               <div className="mt-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Method:</span>
-                  <span className="font-medium">{ownerDebug.methodUsed}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Method:</span>
+                  <span className="font-medium text-app-text">{ownerDebug.methodUsed}</span>
                 </div>
                 {ownerDebug.validationReasons && ownerDebug.validationReasons.length > 0 && (
-                  <div className="mt-1 text-red-600">
+                  <div className="mt-1 text-app-danger">
                     Validation Issues: {ownerDebug.validationReasons.join(", ")}
                   </div>
                 )}
@@ -107,21 +105,20 @@ export function DebugExtractionPanel({
             </div>
           )}
 
-          {/* Photo Extraction */}
           {photoDebug && (
-            <div className="rounded-lg bg-purple-50 p-3">
-              <div className="text-xs font-semibold text-purple-900">Photo Extraction</div>
+            <div className="rounded-lg bg-app-surface-muted p-3 ring-1 ring-app-border/45">
+              <div className="text-xs font-semibold text-app-text">Photo Extraction</div>
               <div className="mt-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Method:</span>
-                  <span className="font-medium">{photoDebug.method}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Method:</span>
+                  <span className="font-medium text-app-text">{photoDebug.method}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Face Detected:</span>
-                  <span className="font-medium">{photoDebug.faceDetected ? "Yes" : "No"}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Face Detected:</span>
+                  <span className="font-medium text-app-text">{photoDebug.faceDetected ? "Yes" : "No"}</span>
                 </div>
                 {photoDebug.warnings && photoDebug.warnings.length > 0 && (
-                  <div className="mt-1 text-amber-600">
+                  <div className="mt-1 text-app-warning">
                     Warnings: {photoDebug.warnings.join(", ")}
                   </div>
                 )}
@@ -129,48 +126,45 @@ export function DebugExtractionPanel({
             </div>
           )}
 
-          {/* Date of Birth Parsing */}
           {dobDebug && (
-            <div className="rounded-lg bg-amber-50 p-3">
-              <div className="text-xs font-semibold text-amber-900">Date of Birth Parsing</div>
+            <div className="rounded-lg border border-app-warning/35 bg-app-warning-muted p-3">
+              <div className="text-xs font-semibold text-app-warning">Date of Birth Parsing</div>
               <div className="mt-2 grid gap-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Raw:</span>
-                  <span className="font-medium">{dobDebug.raw}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Raw:</span>
+                  <span className="font-medium text-app-text">{dobDebug.raw}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Parsed ISO:</span>
-                  <span className="font-medium">{dobDebug.parsedIso}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Parsed ISO:</span>
+                  <span className="font-medium text-app-text">{dobDebug.parsedIso}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Rule Used:</span>
-                  <span className="font-medium">{dobDebug.parseRuleUsed}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Rule Used:</span>
+                  <span className="font-medium text-app-text">{dobDebug.parseRuleUsed}</span>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Sex/Gender Detection */}
           {sexDebug && (
-            <div className="rounded-lg bg-pink-50 p-3">
-              <div className="text-xs font-semibold text-pink-900">Sex/Gender Detection</div>
+            <div className="rounded-lg border border-app-border bg-app-surface-muted p-3">
+              <div className="text-xs font-semibold text-app-text">Sex/Gender Detection</div>
               <div className="mt-2 grid gap-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Method:</span>
-                  <span className="font-medium">{sexDebug.method}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Method:</span>
+                  <span className="font-medium text-app-text">{sexDebug.method}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-600">Decision:</span>
-                  <span className="font-medium">{sexDebug.decision}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-app-muted">Decision:</span>
+                  <span className="font-medium text-app-text">{sexDebug.decision}</span>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Raw Debug JSON */}
-          <div className="rounded-lg bg-slate-100 p-3">
-            <div className="text-xs font-semibold text-slate-900">Raw Extraction Debug</div>
-            <pre className="mt-2 max-h-[300px] overflow-auto rounded bg-white p-2 text-[10px]">
+          <div className="rounded-lg bg-app-surface-muted p-3 ring-1 ring-app-border/45">
+            <div className="text-xs font-semibold text-app-text">Raw Extraction Debug</div>
+            <pre className="mt-2 max-h-[300px] overflow-auto rounded-lg border border-app-border bg-app-bg p-2 text-[10px] text-app-text">
               {JSON.stringify(rawExtractedJson?.debug, null, 2)}
             </pre>
           </div>

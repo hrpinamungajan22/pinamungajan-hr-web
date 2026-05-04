@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/BrandLogo";
 import { LogoutButton } from "@/components/LogoutButton";
-import { PlusCircle, ClipboardCheck, Users, Settings, Sun, Moon, Shield } from "lucide-react";
+import { PlusCircle, Eye, Users, Settings, Sun, Moon, Shield } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { getAdminPath } from "@/lib/urls";
@@ -23,6 +23,7 @@ export function AppShell({
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [role, setRole] = useState<string | null>(null);
+  const [approved, setApproved] = useState(false);
   const [navReady, setNavReady] = useState(false);
 
   useEffect(() => {
@@ -33,15 +34,20 @@ export function AppShell({
     let cancelled = false;
     setNavReady(false);
     fetch("/api/auth/me", { credentials: "include" })
-      .then((r) => r.json() as Promise<{ user: { role: string | null } | null }>)
+      .then(
+        (r) =>
+          r.json() as Promise<{ user: { role: string | null; approved?: boolean } | null }>,
+      )
       .then((data) => {
         if (cancelled) return;
         setRole(data.user?.role ?? null);
+        setApproved(Boolean(data.user?.approved));
         setNavReady(true);
       })
       .catch(() => {
         if (!cancelled) {
           setRole(null);
+          setApproved(false);
           setNavReady(true);
         }
       });
@@ -52,7 +58,8 @@ export function AppShell({
 
   const isAdmin = role === "admin";
   const canUpload = role !== "admin";
-  const canReview = role === "admin";
+  /** Align with canAccessReviewQueue: admin, HR staff, or explicitly approved accounts. */
+  const canReview = role === "admin" || role === "hr" || approved;
   const adminPath = getAdminPath();
 
   function navClass(href: string) {
@@ -96,8 +103,8 @@ export function AppShell({
               ) : null}
               {canReview ? (
                 <Link className={navClass("/review")} href="/review" {...currentProps("/review")}>
-                  <ClipboardCheck className="h-4 w-4 shrink-0" aria-hidden />
-                  <span>Reviews</span>
+                  <Eye className="h-4 w-4 shrink-0" aria-hidden />
+                  <span>Review</span>
                 </Link>
               ) : null}
               <Link className={navClass("/masterlist")} href="/masterlist" {...currentProps("/masterlist")}>

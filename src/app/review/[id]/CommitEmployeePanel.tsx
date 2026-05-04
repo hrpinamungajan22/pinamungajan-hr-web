@@ -151,55 +151,53 @@ export function CommitEmployeePanel({
   }
 
   return (
-    <div className="rounded-xl border bg-white p-4 shadow-sm">
-      <div className="text-sm font-semibold text-slate-900">Save to Masterlist</div>
-      <div className="mt-1 text-xs text-slate-700">
+    <div className="app-card p-4">
+      <div className="text-sm font-semibold text-app-text">Save to Masterlist</div>
+      <div className="mt-1 text-xs text-app-muted">
         This step links this document to an employee and ensures the employee appears in Masterlist.
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        <div className="rounded-lg bg-slate-50 px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-900">OCR owner</div>
-          <div className="mt-1 text-sm text-slate-900">
-            {normalizeDisplayName(owner)}
-          </div>
-          <div className="mt-1 text-xs text-slate-700">DOB: {formatDateDdMmYyyy(owner.date_of_birth)}</div>
+        <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
+          <div className="text-[11px] font-semibold text-app-text">OCR owner</div>
+          <div className="mt-1 text-sm text-app-text">{normalizeDisplayName(owner)}</div>
+          <div className="mt-1 text-xs text-app-muted">DOB: {formatDateDdMmYyyy(owner.date_of_birth)}</div>
         </div>
 
-        <div className="rounded-lg bg-slate-50 px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-900">Link to existing employee (optional)</div>
+        <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
+          <div className="text-[11px] font-semibold text-app-text">Link to existing employee (optional)</div>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search employees (name)"
-            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900"
+            className="app-input mt-1 min-h-9 py-1.5 text-sm"
           />
-          {searchState === "loading" ? <div className="mt-1 text-xs text-slate-600">Searching…</div> : null}
-          {searchState === "error" ? <div className="mt-1 text-xs text-red-700">Search failed</div> : null}
+          {searchState === "loading" ? <div className="mt-1 text-xs text-app-muted">Searching…</div> : null}
+          {searchState === "error" ? <div className="mt-1 text-xs text-app-danger">Search failed</div> : null}
 
           {searchResults.length > 0 ? (
-            <div className="mt-2 max-h-[160px] overflow-auto rounded-md border bg-white">
+            <div className="mt-2 max-h-[160px] overflow-auto rounded-lg border border-app-border bg-app-surface">
               {searchResults.map((e) => (
                 <button
                   key={e.id}
                   type="button"
-                  className={`flex w-full items-center justify-between px-2 py-1.5 text-left text-xs hover:bg-slate-50 ${
-                    selectedEmployeeId === e.id ? "bg-slate-100" : ""
+                  className={`flex w-full items-center justify-between px-2 py-1.5 text-left text-xs transition-colors hover:bg-app-surface-muted ${
+                    selectedEmployeeId === e.id ? "bg-app-primary/10" : ""
                   }`}
                   onClick={() => {
                     setSelectedEmployeeId(e.id);
                     setCommitState({ status: "idle" });
                   }}
                 >
-                  <span className="text-slate-900">{normalizeDisplayName(e)}</span>
-                  <span className="font-mono text-slate-600">{formatDateDdMmYyyy((e as any).date_of_birth)}</span>
+                  <span className="text-app-text">{normalizeDisplayName(e)}</span>
+                  <span className="font-mono text-app-muted">{formatDateDdMmYyyy((e as any).date_of_birth)}</span>
                 </button>
               ))}
             </div>
           ) : null}
 
-          <div className="mt-2 text-xs text-slate-700">
-            Selected employee_id: <span className="font-mono">{selectedEmployeeId || "(none)"}</span>
+          <div className="mt-2 text-xs text-app-muted">
+            Selected employee_id: <span className="font-mono text-app-text">{selectedEmployeeId || "(none)"}</span>
           </div>
         </div>
       </div>
@@ -209,7 +207,7 @@ export function CommitEmployeePanel({
           type="button"
           onClick={() => commit()}
           disabled={commitState.status === "saving"}
-          className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+          className="inline-flex rounded-lg bg-app-primary px-3 py-1.5 text-xs font-semibold text-app-on-primary transition-colors hover:bg-app-primary-hover disabled:opacity-60"
         >
           {commitState.status === "saving" ? "Saving…" : "Save"}
         </button>
@@ -220,38 +218,47 @@ export function CommitEmployeePanel({
             setSelectedEmployeeId(null);
             setCommitState({ status: "idle" });
           }}
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-50"
+          className="rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-xs font-semibold text-app-text hover:bg-app-surface-muted"
         >
           Clear selection
         </button>
 
         {commitState.status === "done" ? (
-          <span className="text-xs text-emerald-700">
+          <span className="text-xs text-app-success">
             Saved. employee_id=<span className="font-mono">{commitState.employeeId}</span>
           </span>
         ) : null}
 
-        {commitState.status === "error" ? <span className="text-xs text-red-700">{commitState.message}</span> : null}
+        {commitState.status === "error" ? <span className="text-xs text-app-danger">{commitState.message}</span> : null}
       </div>
 
       {commitState.status === "needs_confirmation" ? (
-        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-          <div className="text-xs font-semibold text-amber-900">Is this the same person?</div>
-          <div className="mt-1 text-xs text-amber-900">
-            We found possible existing employees that match the name{commitState.reason === "dob_missing" ? " (DOB missing)" : ""}.
+        <div className="app-alert-warning mt-3">
+          <div className="text-xs font-semibold">Is this the same person?</div>
+          <div className="mt-1 text-xs">
+            We found possible existing employees that match the name
+            {commitState.reason === "dob_missing"
+              ? " (DOB missing)"
+              : commitState.reason === "multiple_matches"
+                ? " (multiple matches—choose one below)"
+                : ""}
+            .
           </div>
 
           <div className="mt-2 grid gap-2">
             {commitState.candidates.map((c) => (
-              <div key={c.id} className="flex flex-col gap-2 rounded-md bg-white px-2 py-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs text-slate-900">
+              <div
+                key={c.id}
+                className="flex flex-col gap-2 rounded-md border border-app-border bg-app-surface px-2 py-2 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="text-xs text-app-text">
                   <div className="font-semibold">{normalizeDisplayName(c)}</div>
-                  <div className="font-mono text-slate-700">DOB: {formatDateDdMmYyyy(c.date_of_birth)}</div>
-                  <div className="font-mono text-slate-700">id: {c.id}</div>
+                  <div className="font-mono text-app-muted">DOB: {formatDateDdMmYyyy(c.date_of_birth)}</div>
+                  <div className="font-mono text-app-muted">id: {c.id}</div>
                 </div>
                 <button
                   type="button"
-                  className="rounded-md bg-amber-700 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-800"
+                  className="inline-flex rounded-lg bg-app-primary px-2 py-1 text-xs font-semibold text-app-on-primary hover:bg-app-primary-hover"
                   onClick={() => commit({ employeeId: c.id })}
                 >
                   Yes, link
@@ -263,7 +270,7 @@ export function CommitEmployeePanel({
           <div className="mt-2">
             <button
               type="button"
-              className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+              className="rounded-lg border border-app-warning/45 bg-app-surface px-2 py-1 text-xs font-semibold text-app-warning hover:bg-app-surface-muted"
               onClick={() => commit({ forceCreateNew: true, employeeId: null })}
             >
               No, create new employee

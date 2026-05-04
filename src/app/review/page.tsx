@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { ReviewList } from "@/app/review/ReviewList";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { isAdminUser } from "@/lib/auth/roles";
+import { canAccessReviewQueue } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -11,17 +11,19 @@ export default async function ReviewPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user || !isAdminUser(user)) {
+  if (!user || !canAccessReviewQueue(user)) {
     return (
       <AppShell
         title="Review queue"
-        description="Reserved for administrator accounts. HR staff can upload documents; admins review the queue here."
+        description="Sign in with an approved HR or administrator account to use the review queue."
       >
         <div className="app-card max-w-2xl space-y-3 p-5 sm:p-6">
-          <h2 className="text-base font-semibold text-app-text">Administrators only</h2>
+          <h2 className="text-base font-semibold text-app-text">Access required</h2>
           <p className="app-prose-muted text-sm leading-relaxed">
-            The review queue lists extractions that need a final check. If you are HR staff, ask an administrator to
-            process reviews, or use <strong>Upload</strong> and <strong>Masterlist</strong> in the menu.
+            The review queue is for verifying extractions before they reach the masterlist. If your account still needs
+            approval, wait for an administrator to activate it or use{" "}
+            <strong className="text-app-text">Upload</strong> and <strong className="text-app-text">Masterlist</strong>{" "}
+            from the menu once you can sign in.
           </p>
         </div>
       </AppShell>

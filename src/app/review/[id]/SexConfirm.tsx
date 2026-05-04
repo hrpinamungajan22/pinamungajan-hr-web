@@ -44,18 +44,18 @@ export function SexConfirm({
 
   if (state.status === "done") {
     return (
-      <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-        <div className="text-xs font-semibold text-emerald-900">Confirmed: Sex at Birth = {state.value}</div>
+      <div className="mt-2 rounded-lg border border-app-success/35 bg-app-success-muted px-3 py-2">
+        <div className="text-xs font-semibold text-app-success">Confirmed: Sex at Birth = {state.value}</div>
       </div>
     );
   }
 
   return (
-    <div className={`mt-2 rounded-lg border px-3 py-2 ${isConfirmed ? "border-slate-200 bg-slate-50" : "border-amber-200 bg-amber-50"}`}>
-      <div className={`text-xs font-semibold ${isConfirmed ? "text-slate-700" : "text-amber-900"}`}>
+    <div className={`mt-2 rounded-lg border px-3 py-2 ${isConfirmed ? "border-app-border bg-app-surface-muted" : "border-app-warning/35 bg-app-warning-muted"}`}>
+      <div className={`text-xs font-semibold ${isConfirmed ? "text-app-text" : "text-app-warning"}`}>
         {isConfirmed ? `Current: Sex at Birth = ${initialValue}` : "Needs manual confirmation"}
       </div>
-      <div className={`mt-1 text-xs ${isConfirmed ? "text-slate-600" : "text-amber-900"}`}>
+      <div className={`mt-1 text-xs ${isConfirmed ? "text-app-muted" : "text-app-warning"}`}>
         {isConfirmed ? "Review/change if incorrect:" : "Select Sex at Birth:"}
       </div>
       
@@ -66,9 +66,9 @@ export function SexConfirm({
             checked={selected === "Male"}
             onChange={() => setSelected("Male")}
             disabled={!canConfirm || state.status === "saving"}
-            className="h-4 w-4 rounded border-amber-300 text-indigo-600 focus:ring-indigo-500"
+            className="h-4 w-4 rounded border-app-border text-app-primary focus:ring-app-ring"
           />
-          <span className={`text-sm ${isConfirmed ? "text-slate-800" : "text-amber-900"}`}>Male</span>
+          <span className={`text-sm ${isConfirmed ? "text-app-text" : "text-app-warning"}`}>Male</span>
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
@@ -76,9 +76,9 @@ export function SexConfirm({
             checked={selected === "Female"}
             onChange={() => setSelected("Female")}
             disabled={!canConfirm || state.status === "saving"}
-            className="h-4 w-4 rounded border-amber-300 text-indigo-600 focus:ring-indigo-500"
+            className="h-4 w-4 rounded border-app-border text-app-primary focus:ring-app-ring"
           />
-          <span className={`text-sm ${isConfirmed ? "text-slate-800" : "text-amber-900"}`}>Female</span>
+          <span className={`text-sm ${isConfirmed ? "text-app-text" : "text-app-warning"}`}>Female</span>
         </label>
       </div>
 
@@ -87,20 +87,20 @@ export function SexConfirm({
           type="button"
           onClick={confirm}
           disabled={!canConfirm || !selected || state.status === "saving"}
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+          className="rounded-md bg-app-primary px-3 py-1.5 text-xs font-semibold text-app-on-primary hover:bg-app-primary-hover disabled:opacity-60"
         >
           {state.status === "saving" ? "Saving..." : isConfirmed ? "Update" : "Confirm"}
         </button>
         {!canConfirm ? (
-          <span className={`text-xs ${isConfirmed ? "text-slate-600" : "text-amber-900"}`}>
+          <span className={`text-xs ${isConfirmed ? "text-app-muted" : "text-app-warning"}`}>
             No linked employee yet. Link owner first.
           </span>
         ) : selected !== initialValue ? (
-          <span className="text-xs text-indigo-700">
+          <span className="text-xs text-app-primary">
             {isConfirmed ? "Selection changed - click Update to save" : "Click Confirm to save"}
           </span>
         ) : null}
-        {state.status === "error" ? <span className="text-xs text-red-700">{state.message}</span> : null}
+        {state.status === "error" ? <span className="text-xs text-app-danger">{state.message}</span> : null}
       </div>
     </div>
   );

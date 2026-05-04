@@ -16,3 +16,10 @@ export function isAdminOrHrUser(user: User | null | undefined): boolean {
   const r = getAppRole(user);
   return r === "admin" || r === "hr";
 }
+
+/** Same idea as middleware “approved”: admin, HR staff, or explicitly approved accounts. */
+export function canAccessReviewQueue(user: User | null | undefined): boolean {
+  if (!user) return false;
+  if (isAdminOrHrUser(user)) return true;
+  return user.app_metadata?.approved === true;
+}

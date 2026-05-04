@@ -9,9 +9,51 @@ import { SexConfirm } from "@/app/review/[id]/SexConfirm";
 import { ExtractedPhotoPanel } from "@/app/review/[id]/ExtractedPhotoPanel";
 import { DebugExtractionPanel } from "@/app/review/[id]/DebugExtractionPanel";
 import { DocTypePanel } from "@/app/review/[id]/DocTypePanel";
-import { isAdminUser } from "@/lib/auth/roles";
+import { canAccessReviewQueue } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
+
+function trimReview(s: unknown) {
+  const t = String(s ?? "").trim();
+  return t ? t : "";
+}
+
+/** Prefer committed owner_candidate; never clear UI when debug still has anchor lines (helps diagnose OCR). */
+function pdsPersonalFieldsForDisplay(ex: any) {
+  const raw = ex?.raw_extracted_json;
+  const oc = raw?.owner_candidate || {};
+  const ch = raw?.debug?.owner?.chosenCandidates;
+  const tokens = raw?.debug?.owner?.selectedTokens;
+  const fromTok = (sel: any) =>
+    Array.isArray(sel) ? sel.map((t: any) => String(t?.text || "").trim()).filter(Boolean).join(" ").trim() : "";
+
+  const last =
+    trimReview(oc.last_name) ||
+    trimReview(ch?.surname?.lineText) ||
+    trimReview(fromTok(tokens?.surname));
+  const first =
+    trimReview(oc.first_name) ||
+    trimReview(ch?.first_name?.lineText) ||
+    trimReview(fromTok(tokens?.first_name));
+  const middle =
+    trimReview(oc.middle_name) ||
+    trimReview(ch?.middle_name?.lineText) ||
+    trimReview(fromTok(tokens?.middle_name));
+  const dob = trimReview(oc.date_of_birth) || trimReview(raw?.debug?.dob?.parsedIso);
+  const gender = trimReview(oc.gender) || trimReview(raw?.debug?.sex?.decision);
+
+  return {
+    last_name: last || null,
+    first_name: first || null,
+    middle_name: middle || null,
+    date_of_birth: dob || null,
+    gender: gender || null,
+    /** True when we only have debug/anchor strings — Save to Masterlist still needs owner_candidate in JSON. */
+    displayFromDebugOnly: Boolean(
+      (!trimReview(oc.last_name) && !trimReview(oc.first_name) && (trimReview(ch?.surname?.lineText) || trimReview(ch?.first_name?.lineText))),
+    ),
+  };
+}
 
 export default async function ReviewDetailPage({
   params,
@@ -25,15 +67,15 @@ export default async function ReviewDetailPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user || !isAdminUser(user)) {
+  if (!user || !canAccessReviewQueue(user)) {
     return (
       <AppShell
         title="Review extraction"
-        description="This screen is for administrators who verify extractions for a document."
+        description="Approved HR staff and administrators can verify extractions here."
       >
         <div className="app-card max-w-2xl p-5 sm:p-6 text-sm text-app-muted">
-          Only administrator accounts can open review details. Use the <strong>Review queue</strong> from the menu
-          as an admin.
+          Sign in with an approved account that can use the review queue, then open the row again from{" "}
+          <strong className="text-app-text">Review queue</strong> in the menu.
         </div>
       </AppShell>
     );
@@ -100,6 +142,8 @@ export default async function ReviewDetailPage({
     }
   }
 
+  const pdsPersonal = extraction && !error ? pdsPersonalFieldsForDisplay(extraction) : null;
+
   return (
     <AppShell
       title="Review extraction"
@@ -112,9 +156,11 @@ export default async function ReviewDetailPage({
         </div>
       ) : (
         <div className="grid gap-4">
-          <div className="rounded-xl border bg-white p-4 text-sm shadow-sm">
-            <div className="font-medium">Status: {extraction.status}</div>
-            <div className="mt-2 text-xs text-zinc-800">Extraction ID: {extraction.id}</div>
+          <div className="app-card p-4 text-sm">
+            <div className="font-medium text-app-text">
+              Status: <span className="text-app-primary">{String(extraction.status)}</span>
+            </div>
+            <div className="mt-2 text-xs text-app-muted">Extraction ID: {extraction.id}</div>
           </div>
 
           {/* Document Type Section */}
@@ -129,17 +175,17 @@ export default async function ReviewDetailPage({
           {/* TYPE-SPECIFIC EXTRACTION PANELS */}
           {(extraction as any)?.doc_type_final === "appointment" ? (
             /* APPOINTMENT: Show appointment fields ONLY */
-            <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-slate-900">Appointment Details</div>
-              <div className="mt-2 text-xs text-slate-600">
+            <div className="app-card p-4">
+              <div className="text-sm font-semibold text-app-text">Appointment Details</div>
+              <div className="mt-2 text-xs text-app-muted">
                 Appointment documents update Position, Office, SG, and Salary in the Masterlist.
               </div>
               <div className="mt-3 grid gap-2 text-sm">
-                <div className="rounded-lg bg-slate-50 px-3 py-2">
-                  <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Employee Name</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
+                <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Employee Name</div>
+                      <div className="mt-0.5 text-xs text-app-text">
                         {(() => {
                           const owner = (extraction as any)?.appointment_data?.owner;
                           if (!owner) return "—";
@@ -147,27 +193,27 @@ export default async function ReviewDetailPage({
                         })()}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Position Title</div>
-                      <div className="mt-0.5 text-xs font-semibold text-blue-700">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Position Title</div>
+                      <div className="mt-0.5 text-xs font-semibold text-app-primary">
                         {(extraction as any)?.appointment_data?.position_title || "—"}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Office / Department</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Office / Department</div>
+                      <div className="mt-0.5 text-xs text-app-text">
                         {(extraction as any)?.appointment_data?.office_department || "—"}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Salary Grade (SG)</div>
-                      <div className="mt-0.5 text-xs font-semibold text-blue-700">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Salary Grade (SG)</div>
+                      <div className="mt-0.5 text-xs font-semibold text-app-primary">
                         {(extraction as any)?.appointment_data?.sg ? `SG-${(extraction as any).appointment_data.sg}` : "—"}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Monthly Salary</div>
-                      <div className="mt-0.5 text-xs font-semibold text-blue-700">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Monthly Salary</div>
+                      <div className="mt-0.5 text-xs font-semibold text-app-primary">
                         {(() => {
                           const salary = (extraction as any)?.appointment_data?.monthly_salary;
                           if (!salary) return "—";
@@ -175,9 +221,9 @@ export default async function ReviewDetailPage({
                         })()}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Annual Salary</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Annual Salary</div>
+                      <div className="mt-0.5 text-xs text-app-text">
                         {(() => {
                           const salary = (extraction as any)?.appointment_data?.annual_salary;
                           if (!salary) return "—";
@@ -185,9 +231,9 @@ export default async function ReviewDetailPage({
                         })()}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Date of Signing</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Date of Signing</div>
+                      <div className="mt-0.5 text-xs text-app-text">
                         {formatIsoToDdMmYyyy((extraction as any)?.appointment_data?.appointment_date)}
                       </div>
                     </div>
@@ -195,9 +241,9 @@ export default async function ReviewDetailPage({
                 </div>
                 
                 {/* Confirm & Save Button for Appointment */}
-                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3">
-                  <div className="text-xs font-semibold text-blue-900">Confirm & Save to Masterlist</div>
-                  <div className="mt-1 text-[11px] text-blue-800">
+                <div className="rounded-lg border border-app-primary/25 bg-app-primary/5 px-3 py-3">
+                  <div className="text-xs font-semibold text-app-text">Confirm & Save to Masterlist</div>
+                  <div className="mt-1 text-[11px] text-app-muted">
                     This will update the employee's Position, Office, SG, Salary, and Tenure.
                   </div>
                   <div className="mt-2">
@@ -217,51 +263,49 @@ export default async function ReviewDetailPage({
             </div>
           ) : (extraction as any)?.doc_type_final === "pds" ? (
             /* PDS: Show personal info ONLY (no job fields) */
-            <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-slate-900">Personal Information (PDS)</div>
-              <div className="mt-2 text-xs text-slate-600">
+            <div className="app-card p-4">
+              <div className="text-sm font-semibold text-app-text">Personal Information (PDS)</div>
+              <div className="mt-2 text-xs text-app-muted">
                 PDS extracts personal details only. Job fields (Position, Office, SG, Salary) are NOT updated from PDS.
               </div>
+              {pdsPersonal?.displayFromDebugOnly ? (
+                <div className="app-alert-warning mt-2 text-[11px] leading-relaxed">
+                  Names below include OCR anchor lines that were not stored as <strong className="text-app-text">owner_candidate</strong> yet.
+                  Click <strong className="text-app-text">Run OCR</strong> again after this update, or fix the scan — otherwise Save to Masterlist may still ask for owner fields.
+                </div>
+              ) : null}
               <div className="mt-3 grid gap-2 text-sm">
-                <div className="rounded-lg bg-slate-50 px-3 py-2">
-                  <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Last name</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
-                        {String((extraction as any).raw_extracted_json?.owner_candidate?.last_name ?? "—")}
+                <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Last name</div>
+                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.last_name || "—"}</div>
+                    </div>
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">First name</div>
+                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.first_name || "—"}</div>
+                    </div>
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Middle name</div>
+                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.middle_name || "—"}</div>
+                    </div>
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Date of birth</div>
+                      <div className="mt-0.5 text-xs text-app-text">
+                        {formatIsoToDdMmYyyy(pdsPersonal?.date_of_birth ?? null)}
                       </div>
                     </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">First name</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
-                        {String((extraction as any).raw_extracted_json?.owner_candidate?.first_name ?? "—")}
-                      </div>
-                    </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Middle name</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
-                        {String((extraction as any).raw_extracted_json?.owner_candidate?.middle_name ?? "—")}
-                      </div>
-                    </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Date of birth</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
-                        {formatIsoToDdMmYyyy((extraction as any).raw_extracted_json?.owner_candidate?.date_of_birth)}
-                      </div>
-                    </div>
-                    <div className="rounded-md bg-white px-2 py-1">
-                      <div className="text-[11px] font-semibold text-slate-900">Sex at birth</div>
-                      <div className="mt-0.5 text-xs text-slate-900">
-                        {String((extraction as any).raw_extracted_json?.owner_candidate?.gender ?? "—")}
-                      </div>
+                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                      <div className="text-[11px] font-semibold text-app-text">Sex at birth</div>
+                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.gender || "—"}</div>
                     </div>
                   </div>
                 </div>
-                
-                <SexConfirm 
-                  extractionId={id} 
-                  canConfirm={Boolean(linkedEmployeeIdFromDoc)} 
-                  initialValue={(extraction as any).raw_extracted_json?.owner_candidate?.gender || null}
+
+                <SexConfirm
+                  extractionId={id}
+                  canConfirm={Boolean(linkedEmployeeIdFromDoc)}
+                  initialValue={(pdsPersonal?.gender as "Male" | "Female" | null) || null}
                   isConfirmed={Boolean((extraction as any).raw_extracted_json?.debug?.sex?.decision)}
                 />
 
@@ -269,10 +313,10 @@ export default async function ReviewDetailPage({
                   extractionId={id}
                   initialLinkedEmployeeId={linkedEmployeeIdFromDoc}
                   owner={{
-                    last_name: (extraction as any).raw_extracted_json?.owner_candidate?.last_name ?? null,
-                    first_name: (extraction as any).raw_extracted_json?.owner_candidate?.first_name ?? null,
-                    middle_name: (extraction as any).raw_extracted_json?.owner_candidate?.middle_name ?? null,
-                    date_of_birth: (extraction as any).raw_extracted_json?.owner_candidate?.date_of_birth ?? null,
+                    last_name: pdsPersonal?.last_name ?? null,
+                    first_name: pdsPersonal?.first_name ?? null,
+                    middle_name: pdsPersonal?.middle_name ?? null,
+                    date_of_birth: pdsPersonal?.date_of_birth ?? null,
                   }}
                 />
 
@@ -285,16 +329,17 @@ export default async function ReviewDetailPage({
             </div>
           ) : (
             /* ALL OTHER TYPES: Store only, no extraction */
-            <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-slate-900">Document Storage</div>
-              <div className="mt-2 text-xs text-slate-600">
+            <div className="app-card p-4">
+              <div className="text-sm font-semibold text-app-text">Document Storage</div>
+              <div className="mt-2 text-xs text-app-muted">
                 This document type is stored for reference only. No structured data extraction is performed.
               </div>
-              <div className="mt-3 rounded-lg bg-slate-50 px-3 py-3 text-center">
-                <div className="text-xs text-slate-700">
-                  Document type: <span className="font-semibold">{(extraction as any)?.doc_type_final || "Unknown"}</span>
+              <div className="mt-3 rounded-lg bg-app-surface-muted px-3 py-3 text-center ring-1 ring-app-border/45">
+                <div className="text-xs text-app-text">
+                  Document type:{" "}
+                  <span className="font-semibold text-app-primary">{(extraction as any)?.doc_type_final || "Unknown"}</span>
                 </div>
-                <div className="mt-2 text-[11px] text-slate-500">
+                <div className="mt-2 text-[11px] text-app-muted">
                   Use the Documents section below to preview and download.
                 </div>
               </div>
@@ -303,40 +348,40 @@ export default async function ReviewDetailPage({
 
           {/* Only show old Owner panel for PDS (already included above) or as fallback */}
           {(extraction as any)?.doc_type_final !== "appointment" && (extraction as any)?.doc_type_final !== "pds" && (
-            <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-slate-900">Owner (OCR)</div>
+            <div className="app-card p-4">
+              <div className="text-sm font-semibold text-app-text">Owner (OCR)</div>
               <div className="mt-2 grid gap-2 text-sm">
-                <div className="rounded-lg bg-slate-50 px-3 py-2">
-                  <div className="text-xs text-slate-800">No extraction available for this document type</div>
+                <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
+                  <div className="text-xs text-app-muted">No extraction available for this document type</div>
                 </div>
               </div>
             </div>
           )}
 
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-sm font-semibold text-slate-900">Documents</div>
+          <div className="app-card p-4">
+            <div className="text-sm font-semibold text-app-text">Documents</div>
             <div className="mt-2 grid gap-2 text-sm">
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div>
-                  <div className="font-medium text-slate-900">OCR conversion</div>
-                  <div className="text-xs text-slate-800">Run Google Document AI OCR and store extracted text</div>
+                  <div className="font-medium text-app-text">OCR conversion</div>
+                  <div className="text-xs text-app-muted">Run Google Document AI OCR and store extracted text</div>
                 </div>
                 <div className="self-start sm:self-auto">
                   <RunOcrButton extractionId={id} />
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div>
-                  <div className="font-medium text-slate-900">Printable export</div>
-                  <div className="text-xs text-slate-800">Downloads a non-editable, printable output (image-based)</div>
+                  <div className="font-medium text-app-text">Printable export</div>
+                  <div className="text-xs text-app-muted">Downloads a non-editable, printable output (image-based)</div>
                   {normalizeEnabled ? (
-                    <div className="mt-1 text-[11px] text-slate-700">
+                    <div className="mt-1 text-[11px] text-app-muted">
                       Normalized to 8.5×13 (Legal)
                       {normDebug?.method ? ` • ${String(normDebug.method)}` : ""}
                     </div>
                   ) : (
-                    <div className="mt-1 text-[11px] text-slate-700">Normalization: OFF</div>
+                    <div className="mt-1 text-[11px] text-app-muted">Normalization: OFF</div>
                   )}
                 </div>
                 <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
@@ -348,16 +393,16 @@ export default async function ReviewDetailPage({
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2 rounded-lg bg-sky-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <div className="flex flex-col gap-2 rounded-lg border border-app-primary/20 bg-app-primary/5 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div>
-                  <div className="font-medium text-blue-900">Original upload</div>
-                  <div className="text-xs text-slate-800">
+                  <div className="font-medium text-app-text">Original upload</div>
+                  <div className="text-xs text-app-muted">
                     {originalInfo ? `${originalInfo.filename} (${originalInfo.mime})` : "—"}
                   </div>
                 </div>
                 {originalSignedUrl ? (
                   <a
-                    className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800"
+                    className="inline-flex rounded-lg bg-app-primary px-3 py-1.5 text-xs font-semibold text-app-on-primary transition-colors hover:bg-app-primary-hover"
                     href={originalDownloadHref || originalSignedUrl}
                     target="_blank"
                     rel="noreferrer"
@@ -365,18 +410,18 @@ export default async function ReviewDetailPage({
                     Download
                   </a>
                 ) : (
-                  <span className="text-xs text-slate-800">No link</span>
+                  <span className="text-xs text-app-muted">No link</span>
                 )}
               </div>
 
-              <div className="flex flex-col gap-2 rounded-lg bg-emerald-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <div className="flex flex-col gap-2 rounded-lg border border-app-success/35 bg-app-success-muted px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div>
-                  <div className="font-medium text-emerald-900">Searchable PDF</div>
-                  <div className="text-xs text-slate-800">Generated after OCR (scan/photo + invisible text layer)</div>
+                  <div className="font-medium text-app-success">Searchable PDF</div>
+                  <div className="text-xs text-app-muted">Generated after OCR (scan/photo + invisible text layer)</div>
                 </div>
                 {searchableSignedUrl ? (
                   <a
-                    className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                    className="inline-flex rounded-lg border border-app-success/40 bg-app-success/20 px-3 py-1.5 text-xs font-semibold text-app-success transition-colors hover:bg-app-success/30"
                     href={searchableDownloadHref || searchableSignedUrl}
                     target="_blank"
                     rel="noreferrer"
@@ -384,18 +429,18 @@ export default async function ReviewDetailPage({
                     Download searchable PDF
                   </a>
                 ) : (
-                  <span className="text-xs text-slate-800">No link yet (run OCR)</span>
+                  <span className="text-xs text-app-muted">No link yet (run OCR)</span>
                 )}
               </div>
 
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 px-3 py-2">
+              <div className="flex flex-col gap-2 rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
                 <div>
-                  <div className="font-medium text-slate-900">Guides (blank PDS)</div>
-                  <div className="text-xs text-slate-800">Open the official template to follow the correct format</div>
+                  <div className="font-medium text-app-text">Guides (blank PDS)</div>
+                  <div className="text-xs text-app-muted">Open the official template to follow the correct format</div>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <a
-                    className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100"
+                    className="rounded-md border border-app-border bg-app-surface px-3 py-1.5 text-xs font-semibold text-app-text transition-colors hover:bg-app-surface-muted"
                     href="/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet.pdf"
                     target="_blank"
                     rel="noreferrer"
@@ -403,7 +448,7 @@ export default async function ReviewDetailPage({
                     PDS Guide 1
                   </a>
                   <a
-                    className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100"
+                    className="rounded-md border border-app-border bg-app-surface px-3 py-1.5 text-xs font-semibold text-app-text transition-colors hover:bg-app-surface-muted"
                     href="/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet2.pdf"
                     target="_blank"
                     rel="noreferrer"
@@ -411,7 +456,7 @@ export default async function ReviewDetailPage({
                     PDS Guide 2
                   </a>
                   <a
-                    className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100"
+                    className="rounded-md border border-app-border bg-app-surface px-3 py-1.5 text-xs font-semibold text-app-text transition-colors hover:bg-app-surface-muted"
                     href="/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet3.pdf"
                     target="_blank"
                     rel="noreferrer"
@@ -419,7 +464,7 @@ export default async function ReviewDetailPage({
                     PDS Guide 3
                   </a>
                   <a
-                    className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100"
+                    className="rounded-md border border-app-border bg-app-surface px-3 py-1.5 text-xs font-semibold text-app-text transition-colors hover:bg-app-surface-muted"
                     href="/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet4.pdf"
                     target="_blank"
                     rel="noreferrer"
@@ -438,9 +483,9 @@ export default async function ReviewDetailPage({
             extractionDebug={(extraction as any)?.extraction_debug}
           />
 
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-sm font-semibold text-slate-900">Validated JSON (read-only MVP)</div>
-            <pre className="mt-2 max-h-[400px] overflow-auto rounded-lg bg-slate-50 p-2 sm:p-3 text-xs text-slate-900">
+          <div className="app-card p-4">
+            <div className="text-sm font-semibold text-app-text">Validated JSON (read-only MVP)</div>
+            <pre className="mt-2 max-h-[400px] overflow-auto rounded-lg border border-app-border bg-app-bg p-2 text-xs text-app-text sm:p-3">
               {JSON.stringify(extraction.validated_json, null, 2)}
             </pre>
           </div>

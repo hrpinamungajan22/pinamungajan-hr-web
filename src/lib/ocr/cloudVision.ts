@@ -1,4 +1,5 @@
 import vision from "@google-cloud/vision";
+import { assertServiceAccountJsonFileExists } from "@/lib/gcp/credentialsEnv";
 import type { DocToken } from "../pds/documentAiTokens";
 
 function readEnv(...keys: string[]) {
@@ -64,6 +65,11 @@ export async function performCloudVisionOcr(
         "Invalid GCP_SERVICE_ACCOUNT_JSON: missing client_email/private_key (check quoting/escaping in env var)"
       );
     }
+  }
+
+  if (!credentials) {
+    const adc = readEnv("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALIALS");
+    if (adc) assertServiceAccountJsonFileExists(adc, "GOOGLE_APPLICATION_CREDENTIALS");
   }
 
   const client = credentials

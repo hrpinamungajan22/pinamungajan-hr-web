@@ -1,6 +1,6 @@
 import Image from "next/image";
 
-/** Source: `files/pinamungajan logo.png`, copied to `public/pinamungajan-logo.png` */
+/** Source: `files/pinamungajan logo.png` on white bg */
 const LOGO_SRC = "/pinamungajan-logo.png";
 const LOGO_W = 288;
 const LOGO_H = 287;

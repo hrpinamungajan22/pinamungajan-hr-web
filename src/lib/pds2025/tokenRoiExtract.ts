@@ -52,6 +52,16 @@ function cleanAndRemoveLabels(s: string): string {
   return filtered.join(" ").trim();
 }
 
+// After removing labels, pick only the first plausible name token (alpha, ≥2 chars).
+// This prevents multi-row bleeding from producing junk like "TELLIDUA 6221984 FILIPINO".
+function firstNameToken(s: string): string {
+  const words = s.split(/\s+/).filter(Boolean);
+  for (const w of words) {
+    if (/^[A-Za-z\-]{2,}$/.test(w) && !LABEL_WORDS.has(w.toUpperCase())) return w;
+  }
+  return s;
+}
+
 function insideRoi(box: TokenBox, roi: Roi) {
   return box.midX >= roi.x && box.midX <= roi.x + roi.w && box.midY >= roi.y && box.midY <= roi.y + roi.h;
 }
@@ -89,18 +99,76 @@ export function extractOwnerFromTokensRoi(document: any): { owner: OwnerCandidat
   };
 
   const pageIndex = 0;
+  const page0 = tokensRaw.filter((t) => t.pageIndex === pageIndex);
 
-  const surnameTokens = tokensRaw.filter((t) => t.pageIndex === pageIndex && insideRoi(t.box, PDS2025_PAGE1_ROIS.surname));
-  const firstTokens = tokensRaw.filter((t) => t.pageIndex === pageIndex && insideRoi(t.box, PDS2025_PAGE1_ROIS.first_name));
-  const middleTokens = tokensRaw.filter((t) => t.pageIndex === pageIndex && insideRoi(t.box, PDS2025_PAGE1_ROIS.middle_name));
-  const extTokens = tokensRaw.filter((t) => t.pageIndex === pageIndex && insideRoi(t.box, PDS2025_PAGE1_ROIS.name_extension));
-  const dobTokens = tokensRaw.filter((t) => t.pageIndex === pageIndex && insideRoi(t.box, PDS2025_PAGE1_ROIS.date_of_birth));
+  // Helper: expand an ROI vertically by a delta (for adaptive fallback).
+  function expandRoiY(roi: Roi, dy: number): Roi {
+    return { x: roi.x, y: Math.max(0, roi.y - dy), w: roi.w, h: roi.h + dy * 2 };
+  }
 
-  const surnameRaw = cleanAndRemoveLabels(joinTokensLinewise(surnameTokens));
-  const firstRaw = cleanAndRemoveLabels(joinTokensLinewise(firstTokens));
-  const middleRaw = cleanAndRemoveLabels(joinTokensLinewise(middleTokens));
+  // Y-adaptive fallback: find the SURNAME label token to locate the name row Y.
+  // All three name columns (SURNAME / FIRST NAME / MIDDLE NAME) are on the SAME Y row.
+  function adaptiveRois(): typeof PDS2025_PAGE1_ROIS {
+    const norm = (t: string) => String(t || "").toUpperCase().replace(/\s+/g, "");
+
+    // SURNAME label is leftmost (x < 0.22); FIRST NAME is middle (x ~0.28-0.58); MIDDLE is right (x > 0.58).
+    const surTok  = page0.find((t) => norm(t.text).includes("SURNAME")  && t.box.midX < 0.25);
+    const firstTok= page0.find((t) => norm(t.text).includes("FIRST")    && t.box.midX >= 0.28 && t.box.midX < 0.60);
+    const midTok  = page0.find((t) => norm(t.text).includes("MIDDLE")   && t.box.midX >= 0.58);
+    const dobTok  = page0.find((t) => norm(t.text).includes("DATE")     && t.box.midX < 0.30);
+
+    const anchor  = surTok ?? firstTok ?? midTok;
+    if (!anchor) return PDS2025_PAGE1_ROIS;
+
+    const rowY   = anchor.box.midY;
+    const halfH  = 0.022;
+    const dobY   = dobTok?.box.midY ?? rowY + 0.048;
+
+    return {
+      surname:        { x: 0.18, y: rowY - halfH, w: 0.24, h: halfH * 2 },
+      first_name:     { x: 0.43, y: rowY - halfH, w: 0.21, h: halfH * 2 },
+      middle_name:    { x: 0.72, y: rowY - halfH, w: 0.12, h: halfH * 2 },
+      name_extension: { x: 0.85, y: rowY - halfH, w: 0.10, h: halfH * 2 },
+      date_of_birth:  { x: 0.18, y: dobY - halfH, w: 0.24, h: halfH * 2 },
+    };
+  }
+
+  let rois = PDS2025_PAGE1_ROIS;
+  let surnameTokens = page0.filter((t) => insideRoi(t.box, rois.surname));
+
+  // If nothing found in fixed ROI, try adaptive (label-anchored) ROI.
+  if (surnameTokens.length === 0) {
+    rois = adaptiveRois();
+    surnameTokens = page0.filter((t) => insideRoi(t.box, rois.surname));
+  }
+
+  // If still nothing, try a wider vertical sweep of the fixed X columns.
+  if (surnameTokens.length === 0) {
+    rois = {
+      ...PDS2025_PAGE1_ROIS,
+      surname:     expandRoiY(PDS2025_PAGE1_ROIS.surname,     0.06),
+      first_name:  expandRoiY(PDS2025_PAGE1_ROIS.first_name,  0.06),
+      middle_name: expandRoiY(PDS2025_PAGE1_ROIS.middle_name, 0.06),
+    };
+    surnameTokens = page0.filter((t) => insideRoi(t.box, rois.surname));
+  }
+
+  const firstTokens  = page0.filter((t) => insideRoi(t.box, rois.first_name));
+  const middleTokens = page0.filter((t) => insideRoi(t.box, rois.middle_name));
+  const extTokens    = page0.filter((t) => insideRoi(t.box, rois.name_extension));
+  const dobTokens    = page0.filter((t) => insideRoi(t.box, rois.date_of_birth));
+
+  const surnameRaw = firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(surnameTokens)));
+  const firstRaw   = firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(firstTokens)));
+  const middleRaw  = firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(middleTokens)));
   const extRaw = joinTokensLinewise(extTokens);
   const dobRaw = joinTokensLinewise(dobTokens);
+
+  console.log("[ROI2025] rois:", JSON.stringify({sur:rois.surname, first:rois.first_name, mid:rois.middle_name}));
+  console.log("[ROI2025] raw tokens - sur:", surnameTokens.map(t=>t.text+"@"+t.box.midX.toFixed(3)+","+t.box.midY.toFixed(3)));
+  console.log("[ROI2025] raw tokens - first:", firstTokens.map(t=>t.text+"@"+t.box.midX.toFixed(3)+","+t.box.midY.toFixed(3)));
+  console.log("[ROI2025] raw tokens - mid:", middleTokens.map(t=>t.text+"@"+t.box.midX.toFixed(3)+","+t.box.midY.toFixed(3)));
+  console.log("[ROI2025] cleaned - sur:", surnameRaw, "first:", firstRaw, "mid:", middleRaw);
 
   const lastRes = validatePersonName(surnameRaw, "last");
   if (!lastRes.ok) rejected.surname.push(...lastRes.reasons);
@@ -108,6 +176,7 @@ export function extractOwnerFromTokensRoi(document: any): { owner: OwnerCandidat
   if (!firstRes.ok) rejected.first_name.push(...firstRes.reasons);
   const middleRes = validatePersonName(middleRaw, "middle");
   if (!middleRes.ok) rejected.middle_name.push(...middleRes.reasons);
+  console.log("[ROI2025] validation - sur:", lastRes.ok, firstRes.ok, middleRes.ok, "reasons:", lastRes.reasons, firstRes.reasons);
 
   const last_name = lastRes.ok ? lastRes.value : null;
   const first_name = firstRes.ok ? firstRes.value : null;

@@ -3,15 +3,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+type RunState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "done"; commitHint?: string }
+  | { status: "error"; message: string };
+
 export function RunOcrButton({ extractionId }: { extractionId: string }) {
   const router = useRouter();
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [state, setState] = useState<
-    | { status: "idle" }
-    | { status: "running" }
-    | { status: "done" }
-    | { status: "error"; message: string }
-  >({ status: "idle" });
+  const [state, setState] = useState<RunState>({ status: "idle" });
 
   useEffect(() => {
     if (state.status !== "running") {
@@ -50,6 +51,49 @@ export function RunOcrButton({ extractionId }: { extractionId: string }) {
     }
   }
 
+  async function autoCommitToMasterlist(): Promise<string> {
+    const cRes = await fetch(`${window.location.origin}/api/review/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ extraction_id: extractionId }),
+    });
+
+    const text = await cRes.text();
+    let json: any = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+
+    if (cRes.ok && json?.needs_confirmation) {
+      const reason = String(json.reason || "");
+      if (reason === "multiple_matches") {
+        return "OCR complete. Several masterlist matches — choose one under “Save to Masterlist”.";
+      }
+      if (reason === "dob_missing") {
+        return "OCR complete. Confirm the correct employee under “Save to Masterlist” (DOB was missing).";
+      }
+      return "OCR complete. Finish linking under “Save to Masterlist”.";
+    }
+
+    if (cRes.ok && json?.ok && json?.employee_id) {
+      const action = String(json.action || "");
+      if (action === "already_linked" || action === "linked") {
+        return "OCR complete. Document already linked to masterlist.";
+      }
+      return "OCR complete. Saved to masterlist.";
+    }
+
+    const err =
+      (json && (json.message || json.error)) ||
+      text ||
+      cRes.statusText ||
+      "Use “Save to Masterlist” below.";
+    return `OCR complete. Masterlist: ${String(err).slice(0, 280)}`;
+  }
+
   async function run() {
     try {
       setState({ status: "running" });
@@ -73,7 +117,16 @@ export function RunOcrButton({ extractionId }: { extractionId: string }) {
         return;
       }
 
-      setState({ status: "done" });
+      let commitHint = "OCR complete.";
+      try {
+        commitHint = await autoCommitToMasterlist();
+      } catch (e) {
+        commitHint =
+          "OCR complete. Could not auto-save to masterlist — use “Save to Masterlist” below." +
+          (e instanceof Error ? ` (${e.message})` : "");
+      }
+
+      setState({ status: "done", commitHint });
       router.refresh();
     } catch (e) {
       console.error("Client OCR Error:", e);
@@ -96,33 +149,36 @@ export function RunOcrButton({ extractionId }: { extractionId: string }) {
     <div className="flex flex-col gap-1">
       {state.status === "running" ? (
         <div className="w-full max-w-[420px]">
-          <div className="h-1 w-full overflow-hidden rounded bg-slate-200">
-            <div className="h-full w-1/3 animate-pulse rounded bg-slate-900" />
+          <div className="h-1 w-full overflow-hidden rounded bg-app-surface-muted">
+            <div className="h-full w-1/3 animate-pulse rounded bg-app-primary" />
           </div>
-          <div className="mt-1 text-[11px] text-slate-600">
+          <div className="mt-1 text-[11px] text-app-muted">
             Processing OCR… {Math.max(0, Math.round(elapsedMs / 1000))}s
           </div>
         </div>
       ) : null}
 
-      <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={run}
-        disabled={state.status === "running"}
-        className="min-w-[96px] rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-      >
-        {state.status === "running" ? "Running..." : "Run OCR"}
-      </button>
-      {state.status === "done" ? (
-        <span className="text-xs text-emerald-700">Done</span>
-      ) : null}
-      {state.status === "error" ? (
-        <span className="max-w-[420px] break-words text-xs text-red-700" title={state.message}>
-          {state.message || "OCR failed"}
-        </span>
-      ) : null}
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+        <button
+          type="button"
+          onClick={run}
+          disabled={state.status === "running"}
+          className="min-w-[96px] rounded-md bg-app-primary px-3 py-1.5 text-xs font-semibold text-app-on-primary hover:bg-app-primary-hover disabled:opacity-50"
+        >
+          {state.status === "running" ? "Running..." : "Run OCR"}
+        </button>
+        {state.status === "done" ? (
+          <span className="text-xs text-app-success">Done</span>
+        ) : null}
+        {state.status === "error" ? (
+          <span className="max-w-[420px] break-words text-xs text-app-danger" title={state.message}>
+            {state.message || "OCR failed"}
+          </span>
+        ) : null}
       </div>
+      {state.status === "done" && state.commitHint ? (
+        <p className="max-w-[520px] text-[11px] leading-snug text-app-muted">{state.commitHint}</p>
+      ) : null}
     </div>
   );
 }

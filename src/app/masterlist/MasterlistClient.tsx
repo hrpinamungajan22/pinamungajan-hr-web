@@ -52,6 +52,8 @@ export function MasterlistClient() {
 
   const [page, setPage] = useState(1);
   const pageSize = 50;
+  /** Bumped when the tab becomes visible again so the list refetches after Review → Save elsewhere. */
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const [state, setState] = useState<
     | { status: "idle"; employees: EmployeeRow[]; total: number }
@@ -70,6 +72,16 @@ export function MasterlistClient() {
   }, [debouncedQ]);
 
   useEffect(() => {
+    const bump = () => {
+      if (document.visibilityState === "visible") setRefreshNonce((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", bump);
+    return () => {
+      document.removeEventListener("visibilitychange", bump);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function load() {
@@ -80,7 +92,7 @@ export function MasterlistClient() {
         url.searchParams.set("page", String(page));
         url.searchParams.set("pageSize", String(pageSize));
 
-        const res = await fetch(url.toString(), { credentials: "include" });
+        const res = await fetch(url.toString(), { credentials: "include", cache: "no-store" });
         const text = await res.text();
         if (!res.ok) {
           throw new Error(text || res.statusText || `HTTP ${res.status}`);
@@ -109,7 +121,7 @@ export function MasterlistClient() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedQ, page]);
+  }, [debouncedQ, page, refreshNonce]);
 
   return (
     <div className="flex gap-4">
@@ -214,7 +226,12 @@ export function MasterlistClient() {
                 {state.employees.length === 0 ? (
                   <tr className="border-t border-app-border">
                     <td className="px-3 py-10 text-center text-app-muted" colSpan={14}>
-                      No employees found.
+                      <p>No employees in the masterlist yet.</p>
+                      <p className="mt-2 max-w-xl mx-auto text-xs leading-relaxed">
+                        After OCR runs on a PDS (or similar), open <strong className="text-app-text">Review</strong> for that
+                        extraction and use <strong className="text-app-text">Save to Masterlist</strong>. That creates the
+                        employee record and links uploaded documents.
+                      </p>
                     </td>
                   </tr>
                 ) : null}

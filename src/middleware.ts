@@ -132,9 +132,6 @@ export async function middleware(request: NextRequest) {
   if (isApproved && pathname.startsWith("/pending-approval")) {
     return NextResponse.redirect(new URL("/", request.url));
   }
-  if (pathname.startsWith("/review") && !isAdmin) {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
   if (pathname.startsWith("/upload") && isAdmin) {
     return NextResponse.redirect(new URL("/", request.url));
   }

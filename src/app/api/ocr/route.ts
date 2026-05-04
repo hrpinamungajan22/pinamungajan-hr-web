@@ -29,7 +29,7 @@ import { uploadPhotoWithBucketFallback, PRIMARY_PHOTO_BUCKET, FALLBACK_PHOTO_BUC
 import { PDFDocument } from "pdf-lib";
 import { detectDocumentType, type DocumentType, getDocumentCategory } from "@/lib/document/detection";
 import { extractAppointmentFields, parseAppointmentDate } from "@/lib/appointment/fieldExtract";
-import { extractPdsOwnerFromTextFallback } from "@/lib/ownerDetect/pdsOwner";
+import { extractPdsOwnerFromTextFallback, detectPdsOwnerCandidateFromDocument } from "@/lib/ownerDetect/pdsOwner";
 import { resolveOwnerEmployeeForOcrNameMatches } from "@/lib/owner/resolveOwnerLink";
 
 export const runtime = "nodejs";
@@ -298,11 +298,14 @@ export async function POST(request: Request) {
   }> = [];
 
   // PERF: Processing all pages can take a very long time and cause timeouts.
-  // For PDS, we check up to 4 pages because page 1 (personal info) might not be the actual first file in a batch.
+  // For PDS / auto-detect, scan up to 4 batch pages — page 1 (personal info) may not be file index 0.
   const userSelectedTypeForOcrPaging = (extraction as any)?.doc_type_user_selected;
-  let maxOcrPages = 1;
-  if (userSelectedTypeForOcrPaging === "appointment") maxOcrPages = 3;
-  if (userSelectedTypeForOcrPaging === "pds") maxOcrPages = 4;
+  let maxOcrPages = Math.min(4, Math.max(1, batchDocs.length));
+  if (userSelectedTypeForOcrPaging === "appointment") {
+    maxOcrPages = Math.min(3, Math.max(1, batchDocs.length));
+  } else if (userSelectedTypeForOcrPaging === "pds") {
+    maxOcrPages = Math.min(4, Math.max(1, batchDocs.length));
+  }
   
   for (const row of batchDocs.slice(0, maxOcrPages)) {
     const doc = row.doc;
@@ -432,15 +435,15 @@ export async function POST(request: Request) {
         } else {
           // Server-side OCR (fallback engine) for this page
           const resizedImageMod = sharpMod(page.processedPng)
-            .resize({ width: 800, withoutEnlargement: true });
+            .resize({ width: 1800, withoutEnlargement: true });
           
           const resizedMetadata = await resizedImageMod.metadata();
-          const rWidth = resizedMetadata.width || 800;
-          const rHeight = resizedMetadata.height || 800;
+          const rWidth = resizedMetadata.width || 1800;
+          const rHeight = resizedMetadata.height || 1800;
           
           const resizedImageBuffer = await resizedImageMod.toBuffer();
           // Use Google Cloud Vision API instead of Tesseract (which doesn't work on Vercel)
-          const ocrResult = await withTimeout(performCloudVisionOcr(resizedImageBuffer, i), 30_000, `vision_ocr_page_${i}`);
+          const ocrResult = await withTimeout(performCloudVisionOcr(resizedImageBuffer, i), 45_000, `vision_ocr_page_${i}`);
           
           fullTextAll += ocrResult.text + "\n\n";
           
@@ -788,32 +791,40 @@ export async function POST(request: Request) {
       debug: anchor.debug,
     });
     
-    roi =
-      page1TemplateVersion === "2018"
-        ? extractOwnerFromTokensRoi2018(page1Doc)
-        : page1TemplateVersion === "2025"
-          ? extractOwnerFromTokensRoi(page1Doc)
-          : { owner: null, debug: null };
+    roi = (() => {
+      if (page1TemplateVersion === "2018") return extractOwnerFromTokensRoi2018(page1Doc);
+      if (page1TemplateVersion === "2025") return extractOwnerFromTokensRoi(page1Doc);
+      // Unknown template: try 2025 ROI first, fall back to 2018 ROI.
+      const r2025 = extractOwnerFromTokensRoi(page1Doc);
+      if (r2025.owner) return r2025;
+      return extractOwnerFromTokensRoi2018(page1Doc);
+    })();
     
     console.log("[DEBUG PDS] ROI extraction result:", {
       hasOwner: !!(roi as any).owner,
       owner: (roi as any).owner,
     });
 
-    ownerCandidate = anchor.owner ?? (roi as any).owner ?? null;
+    // ROI extractor uses calibrated fixed template coordinates — prefer it over anchor.
+    ownerCandidate = (roi as any).owner ?? anchor.owner ?? null;
     console.log("[DEBUG PDS] Combined owner candidate:", ownerCandidate);
     
-    // FALLBACK: Use text-based regex extraction if anchor/ROI failed
+    // FALLBACK: Use spatial extractor (token positions) — more reliable than text-only regex.
     if (!ownerCandidate) {
-      console.log("[DEBUG PDS] Anchor/ROI extraction failed, trying text fallback...");
-      const fallbackOwner = extractPdsOwnerFromTextFallback(fullTextAll);
-      console.log("[DEBUG PDS] Fallback extraction result:", fallbackOwner);
-      if (fallbackOwner) {
-        ownerCandidate = fallbackOwner;
+      console.log("[DEBUG PDS] ROI failed, trying spatial token extractor...");
+      const spatial = detectPdsOwnerCandidateFromDocument(page1Doc);
+      console.log("[DEBUG PDS] Spatial result:", spatial);
+      if (spatial?.last_name && spatial?.first_name) {
+        ownerCandidate = spatial as any;
+      } else {
+        // Last resort: text regex (works only when OCR preserves line breaks).
+        const textFallback = extractPdsOwnerFromTextFallback(fullTextAll);
+        console.log("[DEBUG PDS] Text fallback result:", textFallback);
+        if (textFallback) ownerCandidate = textFallback as any;
       }
     }
 
-    const dobRow = extractDobFromPersonalInfoRow(page1Doc, { templateVersion: page1TemplateVersion });
+    dobRow = extractDobFromPersonalInfoRow(page1Doc, { templateVersion: page1TemplateVersion });
     console.log("[DEBUG PDS] DOB extraction result:", dobRow);
     
     if (dobRow.iso && ownerCandidate) {
@@ -824,7 +835,7 @@ export async function POST(request: Request) {
       };
     }
 
-    const sex = await extractSexAtBirth(page1Doc, {
+    sex = await extractSexAtBirth(page1Doc, {
       templateVersion: page1TemplateVersion,
       originalMimeType: "image/png",
       originalBytes: page1?.page?.processedPng,
@@ -835,25 +846,47 @@ export async function POST(request: Request) {
       (ownerCandidate as any).gender = sex.value;
     }
 
-    // Strict validation - but allow fallback results with lower confidence
+    // Strict validation is for text fallbacks; spatial (anchor/ROI) names often trip label-token
+    // heuristics even when the values are correct — keep those unless obviously empty/junk.
     if (ownerCandidate) {
-      const vLast = validatePersonName(String((ownerCandidate as any).last_name || ""), "last");
-      const vFirst = validatePersonName(String((ownerCandidate as any).first_name || ""), "first");
-      console.log("[DEBUG PDS] Validation results:", { last: vLast, first: vFirst });
-      
-      // If validation fails but we have a fallback candidate with confidence < 0.8, use it anyway
-      const isFallback = (ownerCandidate as any).confidence < 0.8;
-      
-      if (!vLast.ok || !vFirst.ok) {
-        if (isFallback && (ownerCandidate as any).last_name && (ownerCandidate as any).first_name) {
-          console.log("[DEBUG PDS] Validation strict but keeping fallback result");
-          // Keep the fallback result but log the validation issues
-        } else {
-          console.log("[DEBUG PDS] Validation failed - clearing owner candidate");
+      const spatialSource = Boolean(anchor?.owner || (roi as any)?.owner);
+      const rawLast = String((ownerCandidate as any).last_name || "").trim();
+      const rawFirst = String((ownerCandidate as any).first_name || "").trim();
+      const vLast = validatePersonName(rawLast, "last");
+      const vFirst = validatePersonName(rawFirst, "first");
+
+      if (vLast.ok && vFirst.ok) {
+        ownerCandidate = {
+          ...ownerCandidate,
+          last_name: vLast.value,
+          first_name: vFirst.value,
+        };
+      } else if (
+        spatialSource &&
+        rawLast.length >= 2 &&
+        rawFirst.length >= 2 &&
+        /[A-Za-zÀ-ÿ]/.test(rawLast) &&
+        /[A-Za-zÀ-ÿ]/.test(rawFirst) &&
+        !looksLikePlaceholderName(rawLast) &&
+        !looksLikePlaceholderName(rawFirst)
+      ) {
+        console.log("[DEBUG PDS] Keeping spatial owner despite validatePersonName:", {
+          vLast: vLast.reasons,
+          vFirst: vFirst.reasons,
+        });
+      } else {
+        const conf = Number((ownerCandidate as any).confidence ?? 0);
+        const isFallback = conf > 0 && conf < 0.8;
+        if (!(isFallback && rawLast && rawFirst)) {
+          console.log("[DEBUG PDS] Validation failed - clearing owner candidate", { vLast, vFirst, spatialSource });
           ownerCandidate = null;
         }
       }
     }
+
+    // NOTE: Anchor last-resort removed — anchor reads entire header row as extractedRaw
+    // which produces junk like "SURNAME FIRST NAME ABABAN ADONIS NAME EXTENSION JR SR".
+    // Text fallback above is the correct last resort.
 
     // Link employee but DO NOT update job fields (position, office, sg, salary, tenure)
     if (ownerCandidate) {
@@ -1023,9 +1056,7 @@ export async function POST(request: Request) {
       }
 
       if (roiBox && tierUsed === "A") {
-        const cx = roiBox.x + roiBox.w / 2;
         const ar = roiBox.w / Math.max(1e-6, roiBox.h);
-        if (cx <= 0.55) tierAFailedReasons.push("roi_not_right_side");
         if (ar < 0.6 || ar > 1.2) tierAFailedReasons.push(`roi_bad_aspect:${ar.toFixed(2)}`);
         if (roiBox.w < 0.10 || roiBox.h < 0.10) tierAFailedReasons.push("roi_too_small");
         if (tierAFailedReasons.length > 0) {
@@ -1035,7 +1066,8 @@ export async function POST(request: Request) {
         }
       }
 
-      const coarseWindow: NormBox = { x: 0.50, y: 0.30, w: 0.48, h: 0.65 }; // Expanded window
+      // Search the full page — photo can be upper-left or lower-right depending on PDS version.
+      const coarseWindow: NormBox = { x: 0.00, y: 0.00, w: 1.00, h: 1.00 };
       let visionCandidates: Array<{ roi: NormBox; score: number; reasons: string[] }> = [];
       try {
         visionCandidates = await findPhotoFrameCandidatesByVision({
@@ -1125,7 +1157,7 @@ export async function POST(request: Request) {
       photoDebug.candidates = bestAttempt.candidates;
       photoDebug.photoLabelBox = bestAttempt.photoLabelBox;
       photoDebug.thumbmarkLabelBox = bestAttempt.thumbLabelBox;
-      photoDebug.coarseWindow = { x: 0.50, y: 0.30, w: 0.48, h: 0.65 };
+      photoDebug.coarseWindow = { x: 0.00, y: 0.00, w: 1.00, h: 1.00 };
       photoDebug.faceDetected = Boolean((bestAttempt.cropped as any)?.debug?.faceLike);
       photoDebug.trim = (bestAttempt.cropped as any)?.debug?.trim ?? null;
       if (bestAttempt.roi) {

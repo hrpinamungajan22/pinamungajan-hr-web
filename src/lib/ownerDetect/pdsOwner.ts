@@ -495,10 +495,11 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
 
   // PDS: owner name rows are near the top of page 1 inside the Personal Information table.
   // Keep this tight; otherwise OCR may match PLACE OF BIRTH / CIVIL STATUS rows.
-  const NAME_LABEL_MAX_MIDY = 0.28;
-  const DOB_LABEL_MAX_MIDY = 0.36;
-  const NAME_LABEL_MIN_MIDY = 0.14;
-  const LABEL_COL_MAX_X = 0.22;
+  const NAME_LABEL_MAX_MIDY = 0.32;
+  const DOB_LABEL_MAX_MIDY = 0.40;
+  const NAME_LABEL_MIN_MIDY = 0.12;
+  // Labels span the full width: SURNAME(x<0.18), FIRST NAME(x~0.42), MIDDLE NAME(x~0.65)
+  const LABEL_COL_MAX_X = 0.90;
 
   function tokenMatches(tokenUpper: string, wantUpper: string) {
     if (!tokenUpper || !wantUpper) return false;
@@ -573,11 +574,13 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
   // If label detection fails, we still try template regions below.
 
   function readRightOf(row: { pageIndex: number; midY: number; rightX: number }, field: "surname" | "first" | "middle") {
-    const band = 0.03;
-    // Values for these fields start in the next cell; clamp to expected value-column range.
-    const minX = Math.max(row.rightX + 0.012, 0.16);
-    // Avoid the right side of the table (name extension / citizenship / etc).
-    const maxX = field === "surname" ? 0.45 : 0.50;
+    // Tight Y-band: only 0.02 to prevent adjacent-row token bleeding.
+    const band = 0.02;
+    const minX = Math.max(row.rightX + 0.008, 0.16);
+    // Per-column caps: each name field occupies its own X column.
+    // SURNAME value: 0.17-0.42 | FIRST NAME value: 0.57-0.65 | MIDDLE NAME value: 0.80-0.88
+    const minXOverride = field === "middle" ? Math.max(minX, 0.72) : minX;
+    const maxX = field === "surname" ? 0.42 : field === "first" ? 0.65 : 0.84;
 
     // Filter out tokens that are likely label words
     const isLabelWord = (t: string) => {
@@ -591,7 +594,7 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
     const candidates = all
       .filter((t) => t.pageIndex === row.pageIndex)
       .filter((t) => Math.abs(t.box.midY - row.midY) <= band)
-      .filter((t) => t.box.minX >= minX)
+      .filter((t) => t.box.minX >= minXOverride)
       .filter((t) => t.box.minX <= maxX)
       .filter((t) => !isLabelWord(t.t)) // Exclude label tokens
       .sort((a, b) => a.box.minX - b.box.minX);
@@ -629,9 +632,20 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
         })
         .sort((a, b) => b.length - a.length)[0];
       if (surnameToken) return surnameToken;
+      return trimToNameTokens(joined, 3);
     }
 
-    return trimToNameTokens(joined, 4);
+    // First name: single word only
+    if (field === "first") {
+      return trimToNameTokens(joined, 1);
+    }
+
+    // Middle name: up to 2 words (e.g., "MARIA CRUZ" or single initial)
+    if (field === "middle") {
+      return trimToNameTokens(joined, 2);
+    }
+
+    return trimToNameTokens(joined, 2);
   }
 
   function readRightOfRaw(
@@ -721,15 +735,15 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
       .filter((t) => t.box.minY >= region.minY && t.box.maxY <= region.maxY)
       .sort((a, b) => a.box.minX - b.box.minX);
     const joined = candidates.map((c) => cleanToken(c.t)).join(" ").replace(/\s+/g, " ").trim();
-    return trimToNameTokens(joined, 4);
+    return trimToNameTokens(joined, 2);
   }
 
-  // Template region fallback for the Personal Information name rows.
-  // If we found the SURNAME label row, derive the band from it (robust to camera skew).
-  const baseY = surnameRow?.midY ?? (firstRow?.midY != null ? firstRow.midY - 0.045 : 0.18);
-  const regionLast = readRegion(0, { minX: 0.18, maxX: 0.62, minY: Math.max(0, baseY - 0.02), maxY: Math.min(1, baseY + 0.03) });
-  const regionFirst = readRegion(0, { minX: 0.18, maxX: 0.62, minY: Math.max(0, baseY + 0.03), maxY: Math.min(1, baseY + 0.07) });
-  const regionMiddle = readRegion(0, { minX: 0.18, maxX: 0.62, minY: Math.max(0, baseY + 0.07), maxY: Math.min(1, baseY + 0.12) });
+  // Template region fallback: all three name fields are on the SAME Y row (horizontal columns).
+  // SURNAME value: x 0.17-0.42 | FIRST NAME value: x 0.57-0.65 | MIDDLE NAME value: x 0.80-0.88
+  const nameRowY = surnameRow?.midY ?? firstRow?.midY ?? middleRow?.midY ?? 0.242;
+  const regionLast   = readRegion(0, { minX: 0.17, maxX: 0.42, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
+  const regionFirst  = readRegion(0, { minX: 0.57, maxX: 0.65, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
+  const regionMiddle = readRegion(0, { minX: 0.72, maxX: 0.84, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
 
   function readRegionRaw(
     pageIndex: number,
@@ -748,8 +762,8 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
     return joined || null;
   }
 
-  // DOB field (Personal Information, left block) derived from surname row.
-  const regionDobRaw = readRegionRaw(0, { minX: 0.18, maxX: 0.40, minY: Math.max(0, baseY + 0.12), maxY: Math.min(1, baseY + 0.18) });
+  // DOB field: approximately 0.048 below name row on legal-normalized page.
+  const regionDobRaw = readRegionRaw(0, { minX: 0.17, maxX: 0.42, minY: Math.max(0, nameRowY + 0.026), maxY: Math.min(1, nameRowY + 0.072) });
   const dobFromRegion = regionDobRaw ? trimToDob(regionDobRaw) : null;
 
   const lowQualitySurname = (v: string | null) => {
@@ -774,9 +788,9 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
   const strongerFirst = regionFirst && (!finalFirst || duplicate) ? regionFirst : finalFirst;
   const strongerMiddle = regionMiddle && (!finalMiddle || duplicate) ? regionMiddle : finalMiddle;
 
-  const finalOutLast = trimToNameTokens(strongerLast || "", 4);
-  const finalOutFirst = trimToNameTokens(strongerFirst || "", 4);
-  const finalOutMiddle = strongerMiddle ? trimToNameTokens(strongerMiddle, 4) : null;
+  const finalOutLast = trimToNameTokens(strongerLast || "", 3);
+  const finalOutFirst = trimToNameTokens(strongerFirst || "", 1);
+  const finalOutMiddle = strongerMiddle ? trimToNameTokens(strongerMiddle, 2) : null;
   if (!finalOutLast || !finalOutFirst) return null;
 
   const chosenLast = chooseNamePart(finalOutLast, "last");
@@ -854,21 +868,20 @@ export function extractPdsOwnerFromTextFallback(fullText: string): OwnerCandidat
   
   const section = personalSectionMatch[0];
   
-  // Extract surname - look for pattern: SURNAME followed by value on same or next line
-  // Handle various OCR formats: "SURNAME Abe", "SURNAME\nAbe", "2. SURNAME Abe"
-  const surnameMatch = section.match(/SURNAME[:\s]*\n?\s*([A-Za-z\-']+(?:\s+[A-Za-z\-']+)?)/i) ||
-                       section.match(/(?:^|\n)\s*\d*\.?\s*SURNAME[:\s]+([A-Za-z\-']+(?:\s+[A-Za-z\-']+)?)/im) ||
-                       section.match(/SUR(?:\s*NAME)?[:\s]*\n?\s*([A-Za-z']{2,}(?:\s+[A-Za-z\-']+)?)/i) ||
+  // Extract surname - more restrictive: single word or hyphenated
+  const surnameMatch = section.match(/SURNAME[:\s]*\n?\s*([A-Za-z\-']+)/i) ||
+                       section.match(/(?:^|\n)\s*\d*\.?\s*SURNAME[:\s]+([A-Za-z\-']+)/im) ||
+                       section.match(/SUR(?:\s*NAME)?[:\s]*\n?\s*([A-Za-z']{2,})/i) ||
                        section.match(/SURN[A-Z]{1}E[:\s]*\n?\s*([A-Za-z']{2,})/i);
   
-  // Extract first name
-  const firstNameMatch = section.match(/FIRST\s*NAME[:\s]*\n?\s*([A-Za-z\-']+(?:\s+[A-Za-z\-']+)?)/i) ||
-                         section.match(/(?:^|\n)\s*\d*\.?\s*FIRST\s*NAME[:\s]+([A-Za-z\-']+(?:\s+[A-Za-z\-']+)?)/im) ||
-                         section.match(/FIRST(?:\s*NAME)?[:\s]*\n?\s*([A-Za-z']{2,}(?:\s+[A-Za-z\-']+)?)/i);
+  // Extract first name - more restrictive: single word or hyphenated, not multiple words
+  const firstNameMatch = section.match(/FIRST\s*NAME[:\s]*\n?\s*([A-Za-z\-']+)/i) ||
+                         section.match(/(?:^|\n)\s*\d*\.?\s*FIRST\s*NAME[:\s]+([A-Za-z\-']+)/im) ||
+                         section.match(/FIRST(?:\s*NAME)?[:\s]*\n?\s*([A-Za-z']{2,})/i);
   
-  // Extract middle name
-  const middleNameMatch = section.match(/MIDDLE\s*NAME[:\s]*\n?\s*([A-Za-z\-']*(?:\s+[A-Za-z\-']+)?)/i) ||
-                          section.match(/(?:^|\n)\s*\d*\.?\s*MIDDLE\s*NAME[:\s]+([A-Za-z\-']*(?:\s+[A-Za-z\-']+)?)/im) ||
+  // Extract middle name - can be empty or single initial
+  const middleNameMatch = section.match(/MIDDLE\s*NAME[:\s]*\n?\s*([A-Za-z\-']*)/i) ||
+                          section.match(/(?:^|\n)\s*\d*\.?\s*MIDDLE\s*NAME[:\s]+([A-Za-z\-']*)/im) ||
                           section.match(/MIDDLE(?:\s*NAME)?[:\s]*\n?\s*([A-Za-z\-']*)/i);
   
   // Extract date of birth - look for dd/mm/yyyy or mm/dd/yyyy pattern near date of birth label
