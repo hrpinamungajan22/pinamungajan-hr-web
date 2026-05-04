@@ -23,7 +23,7 @@ export type Page1Rois = {
 export const PDS2025_PAGE1_ROIS: Page1Rois = {
   surname:        { x: 0.18, y: 0.222, w: 0.24, h: 0.040 },
   first_name:     { x: 0.43, y: 0.222, w: 0.21, h: 0.040 },
-  middle_name:    { x: 0.72, y: 0.222, w: 0.12, h: 0.040 },
+  middle_name:    { x: 0.74, y: 0.222, w: 0.10, h: 0.040 },
   name_extension: { x: 0.85, y: 0.222, w: 0.10, h: 0.040 },
   date_of_birth:  { x: 0.18, y: 0.270, w: 0.24, h: 0.040 },
 };

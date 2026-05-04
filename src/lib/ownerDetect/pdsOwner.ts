@@ -579,7 +579,7 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
     const minX = Math.max(row.rightX + 0.008, 0.16);
     // Per-column caps: each name field occupies its own X column.
     // SURNAME value: 0.17-0.42 | FIRST NAME value: 0.57-0.65 | MIDDLE NAME value: 0.80-0.88
-    const minXOverride = field === "middle" ? Math.max(minX, 0.72) : minX;
+    const minXOverride = field === "middle" ? Math.max(minX, 0.74) : minX;
     const maxX = field === "surname" ? 0.42 : field === "first" ? 0.65 : 0.84;
 
     // Filter out tokens that are likely label words
@@ -743,7 +743,7 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
   const nameRowY = surnameRow?.midY ?? firstRow?.midY ?? middleRow?.midY ?? 0.242;
   const regionLast   = readRegion(0, { minX: 0.17, maxX: 0.42, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
   const regionFirst  = readRegion(0, { minX: 0.57, maxX: 0.65, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
-  const regionMiddle = readRegion(0, { minX: 0.72, maxX: 0.84, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
+  const regionMiddle = readRegion(0, { minX: 0.74, maxX: 0.84, minY: Math.max(0, nameRowY - 0.022), maxY: Math.min(1, nameRowY + 0.022) });
 
   function readRegionRaw(
     pageIndex: number,

@@ -127,7 +127,7 @@ export function extractOwnerFromTokensRoi(document: any): { owner: OwnerCandidat
     return {
       surname:        { x: 0.18, y: rowY - halfH, w: 0.24, h: halfH * 2 },
       first_name:     { x: 0.43, y: rowY - halfH, w: 0.21, h: halfH * 2 },
-      middle_name:    { x: 0.72, y: rowY - halfH, w: 0.12, h: halfH * 2 },
+      middle_name:    { x: 0.74, y: rowY - halfH, w: 0.10, h: halfH * 2 },
       name_extension: { x: 0.85, y: rowY - halfH, w: 0.10, h: halfH * 2 },
       date_of_birth:  { x: 0.18, y: dobY - halfH, w: 0.24, h: halfH * 2 },
     };

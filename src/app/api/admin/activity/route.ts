@@ -71,7 +71,7 @@ export async function GET() {
 
   const { data: empRows } = await supabase
     .from("employees")
-    .select("id, last_name, first_name, middle_name, created_at, updated_at, created_by, updated_by")
+    .select("id, last_name, first_name, middle_name, created_at, updated_at")
     .order("updated_at", { ascending: false })
     .limit(80);
 

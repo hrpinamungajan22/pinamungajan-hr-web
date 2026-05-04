@@ -56,8 +56,8 @@ export function detectDocumentType(fullText: string): DocumentDetectionResult {
     {
       type: "pds",
       patterns: [
-        { regex: /CS\s*FORM\s*NO\.?\s*212/i, weight: 3, label: "cs_form_212" },
-        { regex: /PERSONAL\s+DATA\s+SHEET/i, weight: 3, label: "personal_data_sheet" },
+        { regex: /CS\s*FORM\s*NO\.?\s*212/i, weight: 8, label: "cs_form_212" },
+        { regex: /PERSONAL\s+DATA\s+SHEET/i, weight: 8, label: "personal_data_sheet" },
         { regex: /PERSONAL\s+INFORMATION/i, weight: 2, label: "personal_information" },
         { regex: /SURNAME.*FIRST\s+NAME.*MIDDLE\s+NAME/i, weight: 2, label: "name_headers" },
         { regex: /REVISED\s*2017/i, weight: 2, label: "revised_2017" },
@@ -67,7 +67,7 @@ export function detectDocumentType(fullText: string): DocumentDetectionResult {
         { regex: /TRAINING\s*PROGRAMS/i, weight: 1, label: "training_programs" },
         { regex: /OTHER\s*INFORMATION/i, weight: 1, label: "other_information" },
       ],
-      minMatches: 2,
+      minMatches: 1,
       threshold: 4,
     },
     {
@@ -224,8 +224,8 @@ export function detectDocumentType(fullText: string): DocumentDetectionResult {
         { regex: /DATE\s*OF\s*EXAM/i, weight: 1, label: "date_exam" },
         { regex: /PLACE\s*OF\s*EXAM/i, weight: 1, label: "place_exam" },
       ],
-      minMatches: 2,
-      threshold: 4,
+      minMatches: 3,
+      threshold: 8,
     },
   ];
 
@@ -244,6 +244,20 @@ export function detectDocumentType(fullText: string): DocumentDetectionResult {
     if (matched.length >= rule.minMatches) {
       results[rule.type] = { score, matched };
     }
+  }
+
+  // Hard override: PERSONAL DATA SHEET or CS FORM 212 is unambiguous — always wins.
+  const isPds = /CS\s*FORM\s*NO\.?\s*212/i.test(t) || /PERSONAL\s+DATA\s+SHEET/i.test(t);
+  if (isPds) {
+    return {
+      type: "pds",
+      confidence: 1.0,
+      evidence: {
+        matched: ["personal_data_sheet_override"],
+        scores: { pds: 10 },
+        stage: "text",
+      },
+    };
   }
 
   // Find best match
