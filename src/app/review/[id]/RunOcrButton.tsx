@@ -75,6 +75,9 @@ export function RunOcrButton({ extractionId }: { extractionId: string }) {
       if (reason === "dob_missing") {
         return "OCR complete. Confirm the correct employee under “Save to Masterlist” (DOB was missing).";
       }
+      if (reason === "not_registered") {
+        return "OCR complete. Owner was detected, but no registered employee matched — this record stays pending until HR links or creates the employee under “Save to Masterlist”.";
+      }
       return "OCR complete. Finish linking under “Save to Masterlist”.";
     }
 

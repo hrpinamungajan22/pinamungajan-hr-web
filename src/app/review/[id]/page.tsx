@@ -18,6 +18,15 @@ function trimReview(s: unknown) {
   return t ? t : "";
 }
 
+function statusBadgeClass(status: unknown) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "committed") return "bg-app-success/10 text-app-success";
+  if (normalized === "pending") return "bg-app-warning-muted text-app-warning";
+  if (normalized === "extracted") return "bg-app-primary/10 text-app-primary";
+  if (normalized === "failed" || normalized === "error") return "bg-app-danger-muted text-app-danger";
+  return "bg-app-surface-muted text-app-muted";
+}
+
 /** Prefer committed owner_candidate; never clear UI when debug still has anchor lines (helps diagnose OCR). */
 function pdsPersonalFieldsForDisplay(ex: any) {
   const raw = ex?.raw_extracted_json;
@@ -84,7 +93,7 @@ export default async function ReviewDetailPage({
   const { data: extraction, error } = await supabase
     .from("extractions")
     .select(
-      "id, status, raw_extracted_json, normalized_json, validated_json, warnings, errors, evidence, confidence, document_id, doc_type_user_selected, doc_type_final, doc_type_detected, doc_type_mismatch_warning, appointment_data, extraction_debug"
+      "id, status, raw_extracted_json, normalized_json, validated_json, warnings, errors, evidence, confidence, document_id, document_set_id, batch_id, doc_type_user_selected, doc_type_final, doc_type_detected, doc_type_mismatch_warning, appointment_data, extraction_debug"
     )
     .eq("id", id)
     .single();
@@ -100,6 +109,7 @@ export default async function ReviewDetailPage({
   let linkedEmployeeIdFromDoc: string | null = null;
   let originalDownloadHref: string | null = null;
   let searchableDownloadHref: string | null = null;
+  let photoSourcePages: Array<{ pageIndex: number; label: string }> = [];
 
   if (!error && extraction?.document_id) {
     const { data: doc } = await supabase
@@ -140,6 +150,45 @@ export default async function ReviewDetailPage({
       });
       searchableDownloadHref = `/api/files/download?${qs.toString()}`;
     }
+
+    const docSetId = (extraction as any)?.document_set_id ? String((extraction as any).document_set_id) : "";
+    const batchId = (extraction as any)?.batch_id ? String((extraction as any).batch_id) : "";
+    let pageRows: any[] = [];
+
+    if (docSetId) {
+      const { data } = await supabase
+        .from("employee_documents")
+        .select("page_index, original_filename")
+        .eq("document_set_id", docSetId)
+        .order("page_index", { ascending: true })
+        .order("created_at", { ascending: true });
+      pageRows = data || [];
+    } else if (batchId) {
+      const { data } = await supabase
+        .from("employee_documents")
+        .select("page_index, original_filename")
+        .eq("batch_id", batchId)
+        .order("page_index", { ascending: true })
+        .order("created_at", { ascending: true });
+      pageRows = data || [];
+    }
+
+    const seenPageIndexes = new Set<number>();
+    photoSourcePages = (pageRows || [])
+      .map((row: any) => ({
+        pageIndex: Number(row?.page_index),
+        label: `Page ${Number(row?.page_index) + 1}${row?.original_filename ? ` - ${String(row.original_filename)}` : ""}`,
+      }))
+      .filter((row) => Number.isFinite(row.pageIndex) && row.pageIndex >= 0)
+      .filter((row) => {
+        if (seenPageIndexes.has(row.pageIndex)) return false;
+        seenPageIndexes.add(row.pageIndex);
+        return true;
+      });
+
+    if (photoSourcePages.length === 0 && extraction?.document_id && originalInfo?.filename) {
+      photoSourcePages = [{ pageIndex: 0, label: `Page 1 - ${originalInfo.filename}` }];
+    }
   }
 
   const pdsPersonal = extraction && !error ? pdsPersonalFieldsForDisplay(extraction) : null;
@@ -156,11 +205,21 @@ export default async function ReviewDetailPage({
         </div>
       ) : (
         <div className="grid gap-4">
-          <div className="app-card p-4 text-sm">
-            <div className="font-medium text-app-text">
-              Status: <span className="text-app-primary">{String(extraction.status)}</span>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="app-card p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-app-muted">Status</div>
+              <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-sm font-semibold ${statusBadgeClass(extraction.status)}`}>
+                {String(extraction.status)}
+              </div>
             </div>
-            <div className="mt-2 text-xs text-app-muted">Extraction ID: {extraction.id}</div>
+            <div className="app-card p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-app-muted">Document type</div>
+              <div className="mt-2 text-sm font-semibold text-app-text">{String((extraction as any)?.doc_type_final || "Unknown")}</div>
+            </div>
+            <div className="app-card p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-app-muted">Masterlist link</div>
+              <div className="mt-2 text-sm text-app-text">{linkedEmployeeIdFromDoc ? "Linked to employee" : "Not linked yet"}</div>
+            </div>
           </div>
 
           {/* Document Type Section */}
@@ -324,6 +383,7 @@ export default async function ReviewDetailPage({
                   extractionId={id}
                   initialEmployeeId={linkedEmployeeIdFromDoc}
                   debugPhoto={(extraction as any).raw_extracted_json?.debug?.photo ?? null}
+                  sourcePages={photoSourcePages}
                 />
               </div>
             </div>
@@ -359,7 +419,7 @@ export default async function ReviewDetailPage({
           )}
 
           <div className="app-card p-4">
-            <div className="text-sm font-semibold text-app-text">Documents</div>
+            <div className="text-sm font-semibold text-app-text">Document actions</div>
             <div className="mt-2 grid gap-2 text-sm">
               <div className="flex flex-col gap-2 rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div>
@@ -476,19 +536,26 @@ export default async function ReviewDetailPage({
             </div>
           </div>
 
-          <DebugExtractionPanel
-            rawExtractedJson={extraction.raw_extracted_json}
-            documentType={(extraction as any)?.document_type}
-            appointmentData={(extraction as any)?.appointment_data}
-            extractionDebug={(extraction as any)?.extraction_debug}
-          />
+          <details className="app-card overflow-hidden">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-app-text">Technical debug</summary>
+            <div className="border-t border-app-border p-4">
+              <DebugExtractionPanel
+                rawExtractedJson={extraction.raw_extracted_json}
+                documentType={(extraction as any)?.document_type}
+                appointmentData={(extraction as any)?.appointment_data}
+                extractionDebug={(extraction as any)?.extraction_debug}
+              />
+            </div>
+          </details>
 
-          <div className="app-card p-4">
-            <div className="text-sm font-semibold text-app-text">Validated JSON (read-only MVP)</div>
-            <pre className="mt-2 max-h-[400px] overflow-auto rounded-lg border border-app-border bg-app-bg p-2 text-xs text-app-text sm:p-3">
-              {JSON.stringify(extraction.validated_json, null, 2)}
-            </pre>
-          </div>
+          <details className="app-card overflow-hidden">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-app-text">Validated JSON</summary>
+            <div className="border-t border-app-border p-4">
+              <pre className="max-h-[400px] overflow-auto rounded-lg border border-app-border bg-app-bg p-2 text-xs text-app-text sm:p-3">
+                {JSON.stringify(extraction.validated_json, null, 2)}
+              </pre>
+            </div>
+          </details>
         </div>
       )}
     </AppShell>

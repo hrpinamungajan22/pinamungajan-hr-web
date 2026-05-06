@@ -105,16 +105,16 @@ export function DocumentPreviewModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app-bg/80">
       {/* Header */}
-      <div className="absolute left-0 right-0 top-0 flex items-center justify-between bg-slate-900 px-4 py-3 text-white">
+      <div className="absolute left-0 right-0 top-0 flex items-center justify-between border-b border-app-border bg-app-surface px-4 py-3 text-app-text shadow-sm">
         <div className="flex items-center gap-3">
           <div className="text-sm font-semibold">{title}</div>
           {totalPages > 1 && (
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700 disabled:opacity-50"
+                className="app-btn-secondary rounded px-2 py-1 text-xs disabled:opacity-50"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page <= 0}
               >
@@ -125,7 +125,7 @@ export function DocumentPreviewModal({
               </span>
               <button
                 type="button"
-                className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700 disabled:opacity-50"
+                className="app-btn-secondary rounded px-2 py-1 text-xs disabled:opacity-50"
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page >= totalPages - 1}
               >
@@ -139,7 +139,7 @@ export function DocumentPreviewModal({
           <div className="flex items-center gap-1">
             <button
               type="button"
-              className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700"
+              className="app-btn-secondary rounded px-2 py-1 text-xs"
               onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}
             >
               −
@@ -147,14 +147,14 @@ export function DocumentPreviewModal({
             <span className="w-12 text-center text-xs">{Math.round(zoom * 100)}%</span>
             <button
               type="button"
-              className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700"
+              className="app-btn-secondary rounded px-2 py-1 text-xs"
               onClick={() => setZoom((z) => Math.min(5, z + 0.25))}
             >
               +
             </button>
             <button
               type="button"
-              className="ml-1 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700"
+              className="app-btn-secondary ml-1 rounded px-2 py-1 text-xs"
               onClick={() => {
                 setZoom(1);
                 setPan({ x: 0, y: 0 });
@@ -165,7 +165,7 @@ export function DocumentPreviewModal({
           </div>
           <button
             type="button"
-            className="ml-2 rounded border border-slate-600 bg-slate-800 px-3 py-1 text-xs font-semibold hover:bg-slate-700"
+            className="app-btn-secondary ml-2 rounded px-3 py-1 text-xs font-semibold"
             onClick={onClose}
           >
             Close (Esc)
@@ -196,12 +196,12 @@ export function DocumentPreviewModal({
             draggable={false}
           />
         ) : (
-          <div className="text-sm text-slate-400">No preview available</div>
+          <div className="text-sm text-app-muted">No preview available</div>
         )}
       </div>
 
       {/* Keyboard hints */}
-      <div className="absolute bottom-4 left-4 rounded bg-black/60 px-3 py-2 text-xs text-white/80">
+      <div className="absolute bottom-4 left-4 rounded border border-app-border bg-app-surface/95 px-3 py-2 text-xs text-app-muted shadow-sm backdrop-blur-sm">
         <div className="font-semibold">Keyboard shortcuts</div>
         <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5">
           <span>← →</span>
@@ -217,8 +217,8 @@ export function DocumentPreviewModal({
 
       {/* Page thumbnails (if multiple pages) */}
       {totalPages > 1 && (
-        <div className="absolute bottom-4 right-4 flex max-w-[200px] flex-col gap-1 rounded bg-black/60 p-2">
-          <div className="text-xs font-semibold text-white">Pages</div>
+        <div className="absolute bottom-4 right-4 flex max-w-[200px] flex-col gap-1 rounded border border-app-border bg-app-surface/95 p-2 shadow-sm backdrop-blur-sm">
+          <div className="text-xs font-semibold text-app-text">Pages</div>
           <div className="flex flex-wrap gap-1">
             {urls.map((url, i) => (
               <button
@@ -227,8 +227,8 @@ export function DocumentPreviewModal({
                 onClick={() => setPage(i)}
                 className={`h-8 w-8 rounded text-xs ${
                   i === page
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                    ? "bg-app-primary text-app-on-primary"
+                    : "border border-app-border bg-app-surface text-app-muted hover:bg-app-surface-muted"
                 }`}
               >
                 {i + 1}

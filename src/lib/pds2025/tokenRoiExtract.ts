@@ -52,14 +52,52 @@ function cleanAndRemoveLabels(s: string): string {
   return filtered.join(" ").trim();
 }
 
-// After removing labels, pick only the first plausible name token (alpha, ≥2 chars).
-// This prevents multi-row bleeding from producing junk like "TELLIDUA 6221984 FILIPINO".
 function firstNameToken(s: string): string {
   const words = s.split(/\s+/).filter(Boolean);
   for (const w of words) {
     if (/^[A-Za-z\-]{2,}$/.test(w) && !LABEL_WORDS.has(w.toUpperCase())) return w;
   }
   return s;
+}
+
+function lastNameToken(s: string, avoidUpper: Set<string> = new Set()): string {
+  const words = s.split(/\s+/).filter(Boolean);
+  const candidates = words.filter((w) => /^[A-Za-z\-]{2,}$/.test(w) && !LABEL_WORDS.has(w.toUpperCase()));
+  const filtered = candidates.filter((w) => !avoidUpper.has(w.toUpperCase()));
+  const pool = filtered.length > 0 ? filtered : candidates;
+  return pool.sort((a, b) => b.length - a.length)[0] || s;
+}
+
+function pickNamePartFromTokenText(
+  tokenText: string,
+  which: "last" | "first" | "middle",
+  avoidUpper: Set<string> = new Set()
+) {
+  const parts = cleanAndRemoveLabels(clean(tokenText)).split(/\s+/).filter(Boolean);
+  const candidates = parts.filter((part) => {
+    const upper = part.toUpperCase();
+    if (!/^[A-Za-z\-]{2,}$/.test(part)) return false;
+    if (LABEL_WORDS.has(upper)) return false;
+    if (avoidUpper.has(upper)) return false;
+    return true;
+  });
+  if (candidates.length === 0) return null;
+  if (which === "last") return candidates.sort((a, b) => b.length - a.length)[0] || null;
+  if (which === "middle") return candidates[candidates.length - 1] || null;
+  return candidates[candidates.length - 1] || null;
+}
+
+function pickTokenFromRoi(tokens: DocToken[], prefer: "leftmost" | "rightmost", avoidUpper: Set<string> = new Set()): string | null {
+  const ordered = tokens
+    .slice()
+    .sort((a, b) => prefer === "leftmost" ? a.box.minX - b.box.minX : b.box.maxX - a.box.maxX);
+
+  for (const token of ordered) {
+    const picked = pickNamePartFromTokenText(token.text, prefer === "rightmost" ? "middle" : "first", avoidUpper);
+    if (picked) return picked;
+  }
+
+  return null;
 }
 
 function insideRoi(box: TokenBox, roi: Roi) {
@@ -158,9 +196,15 @@ export function extractOwnerFromTokensRoi(document: any): { owner: OwnerCandidat
   const extTokens    = page0.filter((t) => insideRoi(t.box, rois.name_extension));
   const dobTokens    = page0.filter((t) => insideRoi(t.box, rois.date_of_birth));
 
-  const surnameRaw = firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(surnameTokens)));
-  const firstRaw   = firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(firstTokens)));
-  const middleRaw  = firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(middleTokens)));
+  const surnameRaw = pickNamePartFromTokenText(joinTokensLinewise(surnameTokens), "last")
+    ?? lastNameToken(cleanAndRemoveLabels(joinTokensLinewise(surnameTokens)));
+  const firstRaw   = pickTokenFromRoi(firstTokens, "leftmost", new Set([String(surnameRaw || "").toUpperCase()].filter(Boolean)))
+    ?? pickNamePartFromTokenText(cleanAndRemoveLabels(joinTokensLinewise(firstTokens)), "first", new Set([String(surnameRaw || "").toUpperCase()].filter(Boolean)))
+    ?? firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(firstTokens)));
+  const middleAvoid = new Set([String(firstRaw || "").toUpperCase(), String(surnameRaw || "").toUpperCase()].filter(Boolean));
+  const middleRaw  = pickTokenFromRoi(middleTokens, "rightmost", middleAvoid)
+    ?? pickNamePartFromTokenText(cleanAndRemoveLabels(joinTokensLinewise(middleTokens)), "middle", middleAvoid)
+    ?? firstNameToken(cleanAndRemoveLabels(joinTokensLinewise(middleTokens)));
   const extRaw = joinTokensLinewise(extTokens);
   const dobRaw = joinTokensLinewise(dobTokens);
 

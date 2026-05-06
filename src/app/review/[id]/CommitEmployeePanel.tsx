@@ -241,9 +241,17 @@ export function CommitEmployeePanel({
               ? " (DOB missing)"
               : commitState.reason === "multiple_matches"
                 ? " (multiple matches—choose one below)"
+                : commitState.reason === "not_registered"
+                  ? " (no registered employee found yet)"
                 : ""}
             .
           </div>
+
+          {commitState.reason === "not_registered" ? (
+            <div className="mt-2 text-xs text-app-muted">
+              This extraction stays pending until you either link it to an existing employee or explicitly create a new employee record.
+            </div>
+          ) : null}
 
           <div className="mt-2 grid gap-2">
             {commitState.candidates.map((c) => (

@@ -2,6 +2,15 @@ import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { ExtractionRow } from "@/lib/types";
 
+function statusBadgeClass(status: string) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "committed") return "bg-app-success/10 text-app-success";
+  if (normalized === "pending") return "bg-app-warning-muted text-app-warning";
+  if (normalized === "extracted") return "bg-app-primary/10 text-app-primary";
+  if (normalized === "failed" || normalized === "error") return "bg-app-danger-muted text-app-danger";
+  return "bg-app-surface text-app-muted";
+}
+
 export async function ReviewList() {
   const supabase = await createSupabaseServerClient();
 
@@ -99,8 +108,28 @@ export async function ReviewList() {
       return +new Date(String(bT)) - +new Date(String(aT));
     });
 
+  const totalGroups = groups.length + singles.length;
+
   return (
-    <div className="app-card overflow-hidden">
+    <div className="grid gap-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="app-card p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-app-muted">Queue groups</div>
+          <div className="mt-2 text-2xl font-semibold text-app-text">{totalGroups}</div>
+        </div>
+        <div className="app-card p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-app-muted">Extractions</div>
+          <div className="mt-2 text-2xl font-semibold text-app-text">{rows.length}</div>
+        </div>
+        <div className="app-card p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-app-muted">Latest activity</div>
+          <div className="mt-2 text-sm text-app-text">
+            {rows[0]?.updated_at ? new Date(rows[0].updated_at).toLocaleString() : "No activity yet"}
+          </div>
+        </div>
+      </div>
+
+      <div className="app-card overflow-hidden">
       <div className="app-card-header">Latest extractions</div>
       <div className="divide-y divide-app-border">
         {rows.length === 0 ? (
@@ -112,19 +141,23 @@ export async function ReviewList() {
                 <summary className="cursor-pointer list-none">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 space-y-1">
-                      <div className="text-sm font-semibold text-app-text">
-                        {kind === "document_set" ? "Document set" : "Batch upload"} · {fileCount} file{fileCount === 1 ? "" : "s"}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-semibold text-app-text">
+                          {kind === "document_set" ? "Document set" : "Batch upload"}
+                        </div>
+                        <span className="rounded-full bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-muted">
+                          {fileCount} file{fileCount === 1 ? "" : "s"}
+                        </span>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadgeClass(String(group[group.length - 1]?.status || "uploaded"))}`}>
+                          {String(group[group.length - 1]?.status || "uploaded")}
+                        </span>
                       </div>
-                      <div className="break-all font-mono text-xs text-app-muted">{id}</div>
                       <div className="text-xs text-app-muted">
                         Updated {new Date(group[group.length - 1].updated_at).toLocaleString()}
                       </div>
-                      <div className="font-mono text-[11px] text-app-muted">
-                        By {group[0]?.created_by ? String(group[0].created_by).slice(0, 8) + "…" : "unknown"}
-                      </div>
                     </div>
-                    <Link className="app-link shrink-0 text-sm" href={`/review/${group[0].id}`}>
-                      Open first
+                    <Link className="app-btn-secondary shrink-0 px-3 py-2 text-sm" href={`/review/${group[0].id}`}>
+                      Open
                     </Link>
                   </div>
                 </summary>
@@ -133,8 +166,10 @@ export async function ReviewList() {
                     {group.map((r: (typeof rows)[number]) => (
                       <div key={r.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
                         <div className="min-w-0">
-                          <div className="text-xs font-semibold uppercase tracking-wide text-app-primary">{r.status}</div>
-                          <div className="mt-0.5 break-all font-mono text-[11px] text-app-muted">{r.id}</div>
+                          <div className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(String(r.status))}`}>{r.status}</div>
+                          <div className="mt-1 text-[11px] text-app-muted">
+                            {new Date(r.updated_at || r.created_at).toLocaleString()}
+                          </div>
                         </div>
                         <Link className="app-link shrink-0 text-xs" href={`/review/${r.id}`}>
                           Open
@@ -149,20 +184,17 @@ export async function ReviewList() {
             {singles.map((r: (typeof rows)[number]) => (
               <div key={r.id} className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 space-y-1">
-                  <div className="text-sm font-semibold text-app-text">{r.status}</div>
-                  <div className="break-all font-mono text-xs text-app-muted">{r.id}</div>
+                  <div className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(String(r.status))}`}>{r.status}</div>
                   <div className="text-xs text-app-muted">Uploaded {new Date(r.created_at).toLocaleString()}</div>
-                  <div className="font-mono text-[11px] text-app-muted">
-                    By {r.created_by ? String(r.created_by).slice(0, 8) + "…" : "unknown"}
-                  </div>
                 </div>
-                <Link className="app-link shrink-0 text-sm" href={`/review/${r.id}`}>
+                <Link className="app-btn-secondary shrink-0 px-3 py-2 text-sm" href={`/review/${r.id}`}>
                   Open
                 </Link>
               </div>
             ))}
           </>
         )}
+      </div>
       </div>
     </div>
   );

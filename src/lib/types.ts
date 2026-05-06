@@ -1,10 +1,12 @@
 export type ExtractionStatus =
   | "uploaded"
+  | "pending"
   | "extracted"
   | "in_review"
   | "approved"
   | "committed"
-  | "failed";
+  | "failed"
+  | "error";
 
 export interface EmployeeDocumentRow {
   id: string;

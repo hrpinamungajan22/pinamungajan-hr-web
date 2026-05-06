@@ -8,6 +8,7 @@ type AdminUser = {
   id: string;
   email?: string | null;
   phone?: string | null;
+  user_metadata?: { username?: string | null };
   app_metadata?: { role?: string; approved?: boolean };
   last_sign_in_at?: string | null;
   identities?: Array<{ provider?: string }>;
@@ -19,6 +20,38 @@ function jsonError(message: string, status: number) {
 
 function isValidEmailFormat(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function normalizeUsername(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "")
+    .replace(/^[._-]+|[._-]+$/g, "");
+}
+
+function emailLocalPart(email: string) {
+  const normalized = String(email || "").trim().toLowerCase();
+  const at = normalized.indexOf("@");
+  return at > 0 ? normalized.slice(0, at) : "";
+}
+
+function preferredUsername(user: AdminUser) {
+  return normalizeUsername(String(user.user_metadata?.username || "")) || normalizeUsername(emailLocalPart(String(user.email || "")));
+}
+
+function uniqueUsername(base: string, users: AdminUser[], excludeUserId?: string) {
+  const taken = new Set(
+    users
+      .filter((u) => String(u.id) !== String(excludeUserId || ""))
+      .map((u) => preferredUsername(u))
+      .filter(Boolean)
+  );
+  const root = normalizeUsername(base) || `user${randomBytes(3).toString("hex")}`;
+  if (!taken.has(root)) return root;
+  let i = 2;
+  while (taken.has(`${root}${i}`)) i += 1;
+  return `${root}${i}`;
 }
 
 async function requireAdmin() {
@@ -42,6 +75,7 @@ export async function GET() {
 
   const users = ((data?.users || []) as AdminUser[]).map((u) => ({
     id: u.id,
+    username: preferredUsername(u) || null,
     email: u.email ?? null,
     phone: u.phone ?? null,
     role: String(u.app_metadata?.role || ""),
@@ -57,7 +91,7 @@ export async function POST(request: Request) {
   const guard = await requireAdmin();
   if (!guard.ok) return guard.response;
 
-  let body: { email?: string; password?: string };
+  let body: { email?: string; username?: string; password?: string };
   try {
     body = await request.json();
   } catch {
@@ -65,6 +99,7 @@ export async function POST(request: Request) {
   }
 
   const email = String(body.email || "").trim().toLowerCase();
+  const requestedUsername = normalizeUsername(String(body.username || ""));
   const requestedPassword = String(body.password || "").trim();
   const password = requestedPassword || `HrStaff!${randomBytes(5).toString("hex")}A1`;
 
@@ -83,10 +118,14 @@ export async function POST(request: Request) {
   const { data: listData, error: listErr } = await admin.auth.admin.listUsers({ perPage: 1000 });
   if (listErr) return jsonError(listErr.message, 400);
 
-  const existing = (listData?.users || []).find((u) => String(u.email || "").toLowerCase() === email);
+  const users = (listData?.users || []) as AdminUser[];
+  const desiredUsername = uniqueUsername(requestedUsername || emailLocalPart(email), users);
+
+  const existing = users.find((u) => String(u.email || "").toLowerCase() === email);
   if (existing) {
     const { error: updateErr } = await admin.auth.admin.updateUserById(existing.id, {
       app_metadata: { ...(existing.app_metadata || {}), role: "hr", approved: true },
+      user_metadata: { ...(existing.user_metadata || {}), username: preferredUsername(existing) || desiredUsername },
       ...(requestedPassword ? { password } : {}),
     });
     if (updateErr) return jsonError(updateErr.message, 400);
@@ -94,6 +133,7 @@ export async function POST(request: Request) {
       ok: true,
       mode: "updated",
       email,
+      username: preferredUsername(existing) || desiredUsername,
       generatedPassword: requestedPassword ? password : null,
     });
   }
@@ -102,6 +142,7 @@ export async function POST(request: Request) {
     email,
     password,
     email_confirm: true,
+    user_metadata: { username: desiredUsername },
     app_metadata: { role: "hr", approved: true },
   });
   if (createErr) return jsonError(createErr.message, 400);
@@ -110,6 +151,7 @@ export async function POST(request: Request) {
     ok: true,
     mode: "created",
     email,
+    username: desiredUsername,
     generatedPassword: requestedPassword ? null : password,
   });
 }

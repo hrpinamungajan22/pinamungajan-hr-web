@@ -11,7 +11,7 @@ import {
 } from "@/lib/supabase/client";
 import { getAdminPath, getAdminLoginPath, isAdminAppPath } from "@/lib/urls";
 import { BrandLogo } from "@/components/BrandLogo";
-import { Mail, KeyRound, Eye, EyeOff, LogIn, Shield } from "lucide-react";
+import { User, KeyRound, Eye, EyeOff, LogIn, Shield } from "lucide-react";
 
 function createWaitForSignedIn(supabase: SupabaseClient) {
   return () =>
@@ -92,10 +92,10 @@ function LoginViewInner({ mode, env }: { mode: LoginViewMode; env: SupabaseBrows
   const isAdminLogin = mode === "admin" || isAdminAppPath(nextPath);
   const staffLoginHref = searchParams.get("next") && mode === "admin" ? "/login" : "/";
 
-  const supabase = useMemo(() => createSupabaseBrowserClientFromEnv(env), [env.url, env.anonKey]);
+  const supabase = useMemo(() => createSupabaseBrowserClientFromEnv(env), [env]);
   const waitForSignedIn = useMemo(() => createWaitForSignedIn(supabase), [supabase]);
 
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -115,7 +115,7 @@ function LoginViewInner({ mode, env }: { mode: LoginViewMode; env: SupabaseBrows
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+          body: JSON.stringify({ username: username.trim(), password }),
         });
       } catch (fetchErr) {
         setError(
@@ -210,20 +210,20 @@ function LoginViewInner({ mode, env }: { mode: LoginViewMode; env: SupabaseBrows
 
         <form className="mt-8 space-y-5" onSubmit={onSubmit}>
           <div>
-            <label htmlFor={`${idPrefix}-email`} className="text-sm font-semibold text-app-text">
-              Email address
+            <label htmlFor={`${idPrefix}-username`} className="text-sm font-semibold text-app-text">
+              Username
             </label>
             <div className="relative mt-1.5 flex items-center">
-              <Mail className="pointer-events-none absolute left-3 h-5 w-5 text-app-muted" aria-hidden />
+              <User className="pointer-events-none absolute left-3 h-5 w-5 text-app-muted" aria-hidden />
               <input
-                id={`${idPrefix}-email`}
+                id={`${idPrefix}-username`}
                 className="app-input pl-10"
-                type="email"
-                placeholder="you@example.gov.ph"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                type="text"
+                placeholder={isAdminLogin ? "Enter admin username" : "Enter username"}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 required
-                autoComplete="email"
+                autoComplete="username"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
@@ -281,7 +281,7 @@ function LoginViewInner({ mode, env }: { mode: LoginViewMode; env: SupabaseBrows
           <p className="text-center text-xs leading-relaxed text-app-muted">
             {isAdminLogin
               ? "Use only credentials issued to your office. Contact IT if you are locked out."
-              : "Forgot your password? Ask your HR administrator to reset it in Supabase or your identity system."}
+              : "Use your assigned username and password. If you forgot them, ask your HR administrator."}
           </p>
         </form>
       </div>

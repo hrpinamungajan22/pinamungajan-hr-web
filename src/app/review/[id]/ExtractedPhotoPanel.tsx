@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
+type SourcePage = { pageIndex: number; label: string };
+
 type State =
   | { status: "idle"; signedUrl: string | null }
   | { status: "loading"; signedUrl: string | null }
@@ -33,10 +35,12 @@ export function ExtractedPhotoPanel({
   extractionId,
   initialEmployeeId,
   debugPhoto,
+  sourcePages,
 }: {
   extractionId: string;
   initialEmployeeId: string | null;
   debugPhoto: any;
+  sourcePages?: SourcePage[];
 }) {
   const storedPath = debugPhoto?.storedPath ? String(debugPhoto.storedPath) : "";
   const storedBucket = debugPhoto?.bucketUsed ? String(debugPhoto.bucketUsed) : "employee_photos";
@@ -71,6 +75,25 @@ export function ExtractedPhotoPanel({
   const [roi, setRoi] = useState<NormBox>(() => clampBox(initialNormRoi));
   const [pagePreviewUrl, setPagePreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const availableSourcePages = useMemo<SourcePage[]>(() => {
+    const seen = new Set<number>();
+    const out: SourcePage[] = [];
+    for (const row of Array.isArray(sourcePages) ? sourcePages : []) {
+      const idx = Number(row?.pageIndex);
+      if (!Number.isFinite(idx) || idx < 0 || seen.has(idx)) continue;
+      seen.add(idx);
+      out.push({ pageIndex: idx, label: String(row?.label || `Page ${idx + 1}`) });
+    }
+    if (out.length === 0 && pageIndex !== null && Number.isFinite(pageIndex)) {
+      out.push({ pageIndex, label: `Page ${pageIndex + 1}` });
+    }
+    return out.sort((a, b) => a.pageIndex - b.pageIndex);
+  }, [sourcePages, pageIndex]);
+  const [selectedPageIndex, setSelectedPageIndex] = useState<number | null>(() => {
+    if (pageIndex !== null && Number.isFinite(pageIndex)) return pageIndex;
+    const first = Array.isArray(sourcePages) ? sourcePages[0] : null;
+    return first && Number.isFinite(Number(first.pageIndex)) ? Number(first.pageIndex) : null;
+  });
   const previewWrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pageImgRef = useRef<HTMLImageElement | null>(null);
@@ -105,13 +128,28 @@ export function ExtractedPhotoPanel({
   }, [debugPhoto?.roi?.x, debugPhoto?.roi?.y, debugPhoto?.roi?.w, debugPhoto?.roi?.h, cropMode]);
 
   useEffect(() => {
+    if (pageIndex !== null && Number.isFinite(pageIndex)) {
+      setSelectedPageIndex(pageIndex);
+      return;
+    }
+    if (availableSourcePages.length > 0) {
+      setSelectedPageIndex((current) => {
+        if (current !== null && availableSourcePages.some((p) => p.pageIndex === current)) return current;
+        return availableSourcePages[0].pageIndex;
+      });
+      return;
+    }
+    setSelectedPageIndex(null);
+  }, [pageIndex, availableSourcePages]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!editOpen) {
       setPagePreviewUrl(null);
       setPreviewError(null);
       return;
     }
-    if (pageIndex === null || !Number.isFinite(pageIndex)) {
+    if (selectedPageIndex === null || !Number.isFinite(selectedPageIndex)) {
       setPagePreviewUrl(null);
       setPreviewError("Missing page_index for preview");
       return;
@@ -120,7 +158,7 @@ export function ExtractedPhotoPanel({
       try {
         const url = new URL(`${window.location.origin}/api/pds/page-preview`);
         url.searchParams.set("extraction_id", extractionId);
-        url.searchParams.set("page_index", String(pageIndex));
+        url.searchParams.set("page_index", String(selectedPageIndex));
         const res = await fetch(url.toString(), { method: "GET", credentials: "include" });
         if (!res.ok) {
           const msg = await res.text().catch(() => "");
@@ -147,7 +185,7 @@ export function ExtractedPhotoPanel({
     return () => {
       cancelled = true;
     };
-  }, [editOpen, extractionId, pageIndex]);
+  }, [editOpen, extractionId, selectedPageIndex]);
 
   useEffect(() => {
     return () => {
@@ -162,7 +200,7 @@ export function ExtractedPhotoPanel({
   const canPreview = Boolean(storedPath);
   const canSave = Boolean(storedPath) && faceDetected && Boolean(employeeId);
   const canDebug = Boolean(debugPhoto);
-  const canManualSave = Boolean(employeeId) && pageIndex !== null && Number.isFinite(pageIndex);
+  const canManualSave = Boolean(employeeId) && selectedPageIndex !== null && Number.isFinite(selectedPageIndex);
 
   // Live preview: draw cropped region to canvas whenever ROI changes
   const updateLivePreview = useCallback(() => {
@@ -273,7 +311,7 @@ export function ExtractedPhotoPanel({
 
   async function saveAdjusted() {
     if (!employeeId) return;
-    if (pageIndex === null || !Number.isFinite(pageIndex)) return;
+    if (selectedPageIndex === null || !Number.isFinite(selectedPageIndex)) return;
 
     try {
       setState((s) => ({ status: "saving", signedUrl: s.signedUrl }));
@@ -284,7 +322,7 @@ export function ExtractedPhotoPanel({
         body: JSON.stringify({
           extraction_id: extractionId,
           employee_id: employeeId,
-          page_index: pageIndex,
+          page_index: selectedPageIndex,
           roi: clampBox(roi),
           force: true,
         }),
@@ -476,6 +514,31 @@ export function ExtractedPhotoPanel({
                   ? "Drag the box to position over the face. Size is fixed (35x45mm passport ratio)." 
                   : "Drag to move, resize using handles."} Then save to override the Masterlist photo.
               </div>
+
+              {availableSourcePages.length > 0 ? (
+                <div className="mt-3 max-w-sm">
+                  <label className="block text-[11px] font-semibold text-app-text">
+                    Crop source from uploads
+                    <select
+                      className="mt-1 w-full rounded-md border border-app-border bg-app-surface px-2 py-1.5 text-xs text-app-text"
+                      value={selectedPageIndex ?? ""}
+                      onChange={(e) => {
+                        const nextPageIndex = Number(e.target.value);
+                        setSelectedPageIndex(Number.isFinite(nextPageIndex) ? nextPageIndex : null);
+                      }}
+                    >
+                      {availableSourcePages.map((page) => (
+                        <option key={page.pageIndex} value={page.pageIndex}>
+                          {page.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="mt-1 text-[10px] text-app-muted">
+                    Choose the uploaded page/file that contains the actual ID photo, then drag the crop box.
+                  </div>
+                </div>
+              ) : null}
 
               {/* Mode switcher and zoom */}
               <div className="mt-3 flex items-center gap-3">

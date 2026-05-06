@@ -173,6 +173,10 @@ export function UploadClient() {
     if (rows.length === 0) setBatchId(crypto.randomUUID());
   }, [rows.length]);
 
+  const doneCount = rows.filter((r) => r.status === "done").length;
+  const errorCount = rows.filter((r) => r.status === "error").length;
+  const showAutoSplitHint = docTypeUserSelected === "auto-detect" && rows.length > 1;
+
   async function onUpload(e?: React.FormEvent) {
     e?.preventDefault();
 
@@ -230,6 +234,8 @@ export function UploadClient() {
       const toUpload = allowed.filter((r) => r.status === "queued" || r.status === "error");
       const pageIndexById = new Map<string, number>();
       for (let i = 0; i < rows.length; i++) pageIndexById.set(rows[i].id, i + 1);
+      const autoSegregateMixed = docTypeUserSelected === "auto-detect" && toUpload.length > 1;
+      const shouldSeparatePerFile = separateExtractionPerFile || autoSegregateMixed;
       let batchExtractionId: string | null = null;
       let batchDocumentSetId: string | null = null;
       const extractionIds: string[] = [];
@@ -275,8 +281,8 @@ export function UploadClient() {
             file: row.file,
             batchId: effectiveBatchId,
             pageIndex: idx,
-            extractionId: separateExtractionPerFile ? null : batchExtractionId,
-            documentSetId: batchDocumentSetId,
+            extractionId: shouldSeparatePerFile ? null : batchExtractionId,
+            documentSetId: shouldSeparatePerFile ? null : batchDocumentSetId,
             docTypeUserSelected: docTypeUserSelected === "auto-detect" ? null : docTypeUserSelected,
             accessToken,
             onProgress: (p) => {
@@ -309,9 +315,15 @@ export function UploadClient() {
   return (
     <div className="app-card p-6 sm:p-8">
       <h2 className="text-base font-semibold text-app-text">Upload document</h2>
-      <p className="app-prose-muted mt-1">Choose the document type, then add files. Processing is faster when the type matches the file.</p>
+      <p className="app-prose-muted mt-1">Choose a document type, add files, then send them to the review queue.</p>
 
       <form className="mt-6 flex flex-col gap-4" onSubmit={onUpload}>
+        {showAutoSplitHint ? (
+          <div className="app-alert-info">
+            Mixed uploads are detected automatically. Each file will be kept separate so the correct owner can be reviewed.
+          </div>
+        ) : null}
+
         <div className="rounded-xl border border-app-border bg-app-surface-muted p-4">
           <label className="block text-xs font-semibold uppercase tracking-wide text-app-muted">
             Document type <span className="text-app-danger">*</span>
@@ -344,15 +356,29 @@ export function UploadClient() {
             className="mt-0.5 h-4 w-4 rounded border-app-border text-app-primary focus:ring-app-ring"
           />
           <label htmlFor="separate-extraction" className="text-sm text-app-text">
-            <span className="font-medium">Separate extraction per file</span>
+            <span className="font-medium">Keep each file separate</span>
             <span className="app-prose-muted mt-0.5 block text-xs">
-              Off: one document set for the batch. On: each file gets its own extraction.
+              Turn this on if each uploaded file belongs to a different document record.
             </span>
           </label>
         </div>
 
         <div className="rounded-xl border border-app-border bg-app-surface p-4">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-app-muted">Files</label>
+          <div className="flex items-center justify-between gap-3">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-app-muted">Files</label>
+            {rows.length > 0 ? (
+              <button
+                type="button"
+                className="app-btn-ghost px-2 py-1 text-xs"
+                onClick={() => {
+                  setRows([]);
+                  setState({ status: "idle" });
+                }}
+              >
+                Clear selection
+              </button>
+            ) : null}
+          </div>
           <input
             type="file"
             multiple
@@ -376,12 +402,11 @@ export function UploadClient() {
           {!docTypeUserSelected && <p className="mt-2 text-xs text-app-warning">Select a document type first.</p>}
         </div>
 
-        <p className="text-xs text-app-muted">
-          Batch ID: <span className="font-mono text-app-text">{batchId || "(generating…)"}</span>
-        </p>
-
         <div className="app-table-wrap max-h-[min(18rem,50vh)] overflow-hidden">
-          <div className="app-card-header">Selected files ({rows.length})</div>
+          <div className="app-card-header flex items-center justify-between gap-3">
+            <span>Selected files</span>
+            <span className="text-xs font-medium text-app-muted">{rows.length}</span>
+          </div>
           <div className="max-h-[240px] divide-y divide-app-border overflow-auto">
             {rows.length === 0 ? (
               <div className="px-4 py-4 text-sm text-app-muted">No files selected.</div>
@@ -407,11 +432,6 @@ export function UploadClient() {
                       />
                     </div>
                   ) : null}
-                  {r.status === "done" && r.extractionId ? (
-                    <div className="mt-2 text-xs text-app-muted">
-                      Extraction ID: <span className="font-mono text-app-text">{r.extractionId}</span>
-                    </div>
-                  ) : null}
                   {r.status === "error" && r.error ? (
                     <div className="mt-2 text-xs font-medium text-app-danger">{r.error}</div>
                   ) : null}
@@ -421,18 +441,25 @@ export function UploadClient() {
           </div>
         </div>
 
-        <button
-          type="submit"
-          disabled={state.status === "uploading" || !docTypeUserSelected || rows.length === 0}
-          className="app-btn-primary w-full py-3"
-        >
-          {state.status === "uploading" ? "Uploading…" : "Upload and create extraction"}
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-app-muted">
+            {rows.length > 0 ? `${rows.length} file${rows.length === 1 ? "" : "s"} selected` : "Add files to start"}
+            {doneCount > 0 ? ` · ${doneCount} ready` : ""}
+            {errorCount > 0 ? ` · ${errorCount} issue${errorCount === 1 ? "" : "s"}` : ""}
+          </div>
+          <button
+            type="submit"
+            disabled={state.status === "uploading" || !docTypeUserSelected || rows.length === 0}
+            className="app-btn-primary w-full py-3 sm:w-auto sm:min-w-[220px]"
+          >
+            {state.status === "uploading" ? "Uploading…" : "Upload files"}
+          </button>
+        </div>
 
         {state.status === "done" ? (
           <div className="rounded-xl border border-app-success/30 bg-app-success-muted px-4 py-3 text-sm text-app-success">
             <p>
-              Batch <span className="font-mono font-semibold">{state.batchId}</span> created.
+              {state.extractionIds.length} extraction{state.extractionIds.length === 1 ? "" : "s"} ready for review.
             </p>
             <a className="app-link mt-2 inline-block text-sm" href="/review">
               Go to review queue →

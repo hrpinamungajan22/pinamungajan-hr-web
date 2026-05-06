@@ -167,7 +167,7 @@ function chooseNamePart(value: string | null, which: "last" | "first" | "middle"
       .sort((a, b) => b.length - a.length)[0];
     return best || toks[0] || null;
   }
-  if (which === "middle") return toks[0] || null;
+  if (which === "middle") return toks[toks.length - 1] || null;
   return toks[toks.length - 1] || null;
 }
 
@@ -796,6 +796,12 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
   const chosenLast = chooseNamePart(finalOutLast, "last");
   const chosenFirst = chooseNamePart(finalOutFirst, "first");
   const chosenMiddle = chooseNamePart(finalOutMiddle, "middle");
+  const betterMiddle = (finalOutMiddle || "")
+    .split(" ")
+    .filter(Boolean)
+    .filter((t) => /^[A-Za-z\-]{2,}$/.test(t))
+    .filter((t) => t.toUpperCase() !== String(chosenFirst || "").toUpperCase())
+    .slice(-1)[0] || null;
 
   // If surname is still low quality (common when SURNAME label is missed), recover it from the band above FIRST NAME.
   const lastUpper = (chosenLast || "").toUpperCase();
@@ -830,7 +836,7 @@ function detectPdsOwnerCandidateSpatial(document: any): OwnerCandidate | null {
 
   return {
     first_name: removeLabelWordsFromResult(chosenFirst),
-    middle_name: removeLabelWordsFromResult(chosenMiddle),
+    middle_name: removeLabelWordsFromResult(betterMiddle || chosenMiddle),
     last_name: removeLabelWordsFromResult(recoveredLast || betterLast || chosenLast),
     date_of_birth: dob || null,
     gender: null,

@@ -98,16 +98,6 @@ export function MasterlistClient() {
           throw new Error(text || res.statusText || `HTTP ${res.status}`);
         }
         const json = JSON.parse(text) as { employees: EmployeeRow[]; total: number };
-        
-        // Debug: log first employee to check tenure
-        if (json.employees && json.employees.length > 0) {
-          console.log("[DEBUG CLIENT] First employee:", {
-            name: `${json.employees[0].first_name} ${json.employees[0].last_name}`,
-            tenure_years: json.employees[0].tenure_years,
-            tenure_months: json.employees[0].tenure_months,
-          });
-        }
-        
         if (cancelled) return;
         setState({ status: "idle", employees: json.employees || [], total: Number(json.total || 0) });
       } catch (err) {
@@ -126,8 +116,8 @@ export function MasterlistClient() {
   return (
     <div className="flex gap-4">
       <div className="min-w-0 flex-1">
-        <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0 flex-1">
+        <div className="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="app-card p-4">
             <label className="text-sm font-medium text-app-text" htmlFor="masterlist-search">
               Search employees
             </label>
@@ -135,18 +125,19 @@ export function MasterlistClient() {
               id="masterlist-search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Last name, first name, or middle name"
-              className="app-input mt-1.5"
+              placeholder="Search by last name, first name, or middle name"
+              className="app-input mt-2"
             />
-            <p className="mt-1.5 text-xs text-app-muted">
-              Total: <span className="font-mono text-app-text">{state.total}</span>
-              {state.status === "loading" ? " · Loading…" : ""}
-              {state.status === "error" ? " · Error" : ""}
-            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-app-muted">
+              <span>
+                Showing <span className="font-mono text-app-text">{state.employees.length}</span> of <span className="font-mono text-app-text">{state.total}</span>
+              </span>
+              {state.status === "loading" ? <span>Refreshing…</span> : null}
+            </div>
             {state.status === "error" ? <div className="app-alert-danger mt-3 text-xs">{state.message}</div> : null}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 self-start lg:self-auto">
             <button
               type="button"
               className="app-btn-secondary px-3 py-2 text-sm"
@@ -171,7 +162,7 @@ export function MasterlistClient() {
 
         <div className="app-table-wrap overflow-hidden">
           <div className="overflow-auto">
-            <table className="w-full min-w-[1400px] text-sm">
+            <table className="w-full min-w-[1040px] text-sm">
               <thead className="app-table-head">
                 <tr>
                   <th className="px-3 py-3 text-left">Last name</th>
@@ -181,10 +172,6 @@ export function MasterlistClient() {
                   <th className="px-3 py-3 text-left">Tenure</th>
                   <th className="px-3 py-3 text-left">Office</th>
                   <th className="px-3 py-3 text-left">Position</th>
-                  <th className="px-3 py-3 text-left">SG</th>
-                  <th className="px-3 py-3 text-left">Step</th>
-                  <th className="px-3 py-3 text-left">Monthly</th>
-                  <th className="px-3 py-3 text-left">Annual</th>
                   <th className="px-3 py-3 text-left">Gender</th>
                   <th className="px-3 py-3 text-left">View</th>
                   <th className="px-3 py-3 text-left">Delete</th>
@@ -204,10 +191,6 @@ export function MasterlistClient() {
                     <td className="px-3 py-2 whitespace-nowrap">{tenureLabel(e.tenure_years, e.tenure_months)}</td>
                     <td className="px-3 py-2">{e.office_department || ""}</td>
                     <td className="px-3 py-2">{e.position_title || ""}</td>
-                    <td className="px-3 py-2">{e.sg ?? ""}</td>
-                    <td className="px-3 py-2">{e.step ?? ""}</td>
-                    <td className="px-3 py-2">{e.monthly_salary ? `₱${Number(e.monthly_salary).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : ""}</td>
-                    <td className="px-3 py-2">{e.annual_salary ? `₱${Number(e.annual_salary).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : ""}</td>
                     <td className="px-3 py-2">{e.gender ?? ""}</td>
                     <td className="px-3 py-2" onClick={(ev) => ev.stopPropagation()}>
                       <button
@@ -225,7 +208,7 @@ export function MasterlistClient() {
                 ))}
                 {state.employees.length === 0 ? (
                   <tr className="border-t border-app-border">
-                    <td className="px-3 py-10 text-center text-app-muted" colSpan={14}>
+                    <td className="px-3 py-10 text-center text-app-muted" colSpan={10}>
                       <p>No employees in the masterlist yet.</p>
                       <p className="mt-2 max-w-xl mx-auto text-xs leading-relaxed">
                         After OCR runs on a PDS (or similar), open <strong className="text-app-text">Review</strong> for that

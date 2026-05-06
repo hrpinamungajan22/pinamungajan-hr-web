@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { extractOwnerFromTokensRoi } from "@/lib/pds2025/tokenRoiExtract";
-import { detectPdsTemplateVersionFromText } from "@/lib/pds/templateDetect";
+import { detectPdsTemplateVersionFromText, type PdsTemplateVersion } from "@/lib/pds/templateDetect";
 import { extractOwnerByAnchors } from "@/lib/pds/anchorOwnerExtract";
 import { extractOwnerFromTokensRoi2018 } from "@/lib/pds2018/tokenRoiExtract";
 import { computeAgeAndGroupFromDobIso } from "@/lib/age";
@@ -70,6 +70,70 @@ function normalizeNameForMatch(s: string) {
     .trim();
 }
 
+function splitNameTokensPreserveShort(value: string) {
+  return String(value || "")
+    .replace(/[^A-Za-z\-\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .filter((t) => /^[A-Za-z\-]{2,}$/.test(t));
+}
+
+function uniqueNameTokensPreserveOrder(tokens: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of tokens) {
+    const upper = String(token || "").toUpperCase();
+    if (!upper || seen.has(upper)) continue;
+    seen.add(upper);
+    out.push(token);
+  }
+  return out;
+}
+
+function filterNameTokensIfPossible(tokens: string[], avoidUpper: Set<string>) {
+  if (tokens.length === 0 || avoidUpper.size === 0) return tokens;
+  const filtered = tokens.filter((t) => !avoidUpper.has(String(t || "").toUpperCase()));
+  return filtered.length > 0 ? filtered : tokens;
+}
+
+function sanitizeOwnerCandidateNames(owner: any) {
+  if (!owner) return owner;
+
+  const rawLast = String(owner.last_name || "").trim();
+  const rawFirst = String(owner.first_name || "").trim();
+  const rawMiddle = String(owner.middle_name || "").trim();
+
+  let lastTokens = uniqueNameTokensPreserveOrder(splitNameTokensPreserveShort(rawLast));
+  let firstTokens = uniqueNameTokensPreserveOrder(splitNameTokensPreserveShort(rawFirst));
+  let middleTokens = uniqueNameTokensPreserveOrder(splitNameTokensPreserveShort(rawMiddle));
+
+  const lastUpper = new Set(lastTokens.map((t) => t.toUpperCase()));
+  firstTokens = filterNameTokensIfPossible(firstTokens, lastUpper);
+
+  const firstUpper = new Set(firstTokens.map((t) => t.toUpperCase()));
+  middleTokens = filterNameTokensIfPossible(middleTokens, new Set([...lastUpper, ...firstUpper]));
+
+  const middleUpper = new Set(middleTokens.map((t) => t.toUpperCase()));
+  firstTokens = filterNameTokensIfPossible(firstTokens, middleUpper);
+
+  if (lastTokens.length > 1) {
+    lastTokens = filterNameTokensIfPossible(lastTokens, new Set([...firstUpper, ...middleUpper]));
+  }
+
+  const last = lastTokens.length > 0 ? lastTokens.join(" ") : (rawLast || null);
+  const first = firstTokens.length > 0 ? firstTokens.join(" ") : null;
+  const middle = middleTokens.length > 0 ? middleTokens.join(" ") : null;
+
+  return {
+    ...owner,
+    last_name: last,
+    first_name: first,
+    middle_name: middle,
+  };
+}
+
 function tokenTextUpper(t: any) {
   return String(t?.text || "").trim().toUpperCase();
 }
@@ -82,17 +146,18 @@ function tokenHeight(t: any) {
 function pickBestPhotoLabelToken(tokens: any[]) {
   const candidates = (tokens || [])
     .filter((t) => tokenTextUpper(t) === "PHOTO")
-    .filter((t) => (t?.box?.midX ?? 0) > 0.55)
-    .filter((t) => (t?.box?.midY ?? 0) > 0.45)
     .filter((t) => tokenHeight(t) >= 0.006);
 
   candidates.sort((a, b) => {
-    const ax = Number(a?.box?.midX || 0);
-    const bx = Number(b?.box?.midX || 0);
-    if (bx !== ax) return bx - ax;
+    const ah = tokenHeight(a);
+    const bh = tokenHeight(b);
+    if (bh !== ah) return bh - ah;
     const ay = Number(a?.box?.midY || 0);
     const by = Number(b?.box?.midY || 0);
-    return by - ay;
+    if (ay !== by) return ay - by;
+    const ax = Number(a?.box?.midX || 0);
+    const bx = Number(b?.box?.midX || 0);
+    return ax - bx;
   });
   return candidates[0] || null;
 }
@@ -179,14 +244,14 @@ export async function POST(request: Request) {
     return Buffer.from(await downloaded.arrayBuffer());
   }
 
-  async function loadBatchDocuments(): Promise<
-    Array<{
-      document_id: string;
-      batch_id: string | null;
-      page_index: number | null;
-      doc: any;
-    }>
-  > {
+  type BatchDocRow = {
+    document_id: string;
+    batch_id: string | null;
+    page_index: number | null;
+    doc: any;
+  };
+
+  async function loadBatchDocuments(): Promise<BatchDocRow[]> {
     const documentSetId = (extraction as any)?.document_set_id ? String((extraction as any).document_set_id) : null;
     if (documentSetId) {
       const { data: docs, error: docsErr } = await supabase
@@ -239,27 +304,26 @@ export async function POST(request: Request) {
     }));
   }
 
-  function scorePage1FromText(text: string) {
-    const u = String(text || "").toUpperCase().replace(/\s+/g, "");
-    let score = 0;
-    
-    // Use joined text (no spaces) to be resilient to OCR spacing errors
-    if (u.includes("PERSONALDATASHEET")) score += 50;
-    if (u.includes("CSFORM") && u.includes("212")) score += 60;
-    if (u.includes("REVISED2017") || u.includes("REVISED2018") || u.includes("REVISED2025")) score += 30;
-    if (u.includes("PERSONAL") && u.includes("INFORMATION")) score += 80;
-    if (u.includes("SURNAME")) score += 35;
-    if (u.includes("FIRSTNAME")) score += 20;
-    if (u.includes("MIDDLENAME")) score += 20;
-    if (u.includes("DATEOFBIRTH") || u.includes("BIRTHDATE")) score += 25;
-    if (u.includes("SEXATBIRTH") || (u.includes("SEX") && u.includes("BIRTH"))) score += 15;
-    
-    // Add additional PDS-specific anchors for page 1
-    if (u.includes("CIVILSTATUS")) score += 10;
-    if (u.includes("CITIZENSHIP")) score += 10;
-    if (u.includes("RESIDENCETAX")) score += 10;
-    
-    return score;
+  async function mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T, index: number) => Promise<R>
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+
+    async function run() {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= items.length) return;
+        results[current] = await worker(items[current], current);
+      }
+    }
+
+    const runners = Array.from({ length: Math.max(1, Math.min(concurrency, items.length || 1)) }, () => run());
+    await Promise.all(runners);
+    return results;
   }
 
   const batchDocs = await loadBatchDocuments();
@@ -270,6 +334,7 @@ export async function POST(request: Request) {
   let searchablePdf: any = null;
   let searchablePdfWarning: string | null = null;
   const pageCount = batchDocs.length;
+  let firstOriginalBytesForSearchablePdf: Buffer | null = null;
 
   let clientTokensToNormalize: any[] = [];
   // VERCEL TIMEOUT BYPASS: If client sent tokens, apply them
@@ -286,7 +351,7 @@ export async function POST(request: Request) {
 
   // Setup Tesseract loop later
 
-  const pages: Array<{
+  type PreparedPage = {
     document_id: string;
     batch_id: string | null;
     page_index: number | null;
@@ -295,26 +360,44 @@ export async function POST(request: Request) {
     processedPng: Buffer;
     preprocessDebug: any;
     filename: string | null;
-  }> = [];
+  };
 
   // PERF: Processing all pages can take a very long time and cause timeouts.
   // For PDS / auto-detect, scan up to 4 batch pages — page 1 (personal info) may not be file index 0.
   const userSelectedTypeForOcrPaging = (extraction as any)?.doc_type_user_selected;
-  let maxOcrPages = Math.min(4, Math.max(1, batchDocs.length));
+  const pdsFocusedOcr = !userSelectedTypeForOcrPaging || userSelectedTypeForOcrPaging === "auto-detect" || userSelectedTypeForOcrPaging === "pds";
+  let maxOcrPages = Math.min(pdsFocusedOcr ? 4 : 1, Math.max(1, batchDocs.length));
   if (userSelectedTypeForOcrPaging === "appointment") {
-    maxOcrPages = Math.min(3, Math.max(1, batchDocs.length));
+    maxOcrPages = Math.min(1, Math.max(1, batchDocs.length));
   } else if (userSelectedTypeForOcrPaging === "pds") {
     maxOcrPages = Math.min(4, Math.max(1, batchDocs.length));
   }
-  
-  for (const row of batchDocs.slice(0, maxOcrPages)) {
+
+  const batchDocsForOcr = (() => {
+    if (!pdsFocusedOcr || batchDocs.length <= maxOcrPages) return batchDocs.slice(0, maxOcrPages);
+    const picks: BatchDocRow[] = [];
+    const pushIfMissing = (row: BatchDocRow | undefined) => {
+      if (!row) return;
+      if (picks.some((p) => String(p.document_id) === String(row.document_id))) return;
+      picks.push(row);
+    };
+
+    pushIfMissing(batchDocs[0]);
+    pushIfMissing(batchDocs[1]);
+    pushIfMissing(batchDocs[2]);
+    pushIfMissing(batchDocs[batchDocs.length - 1]);
+
+    return picks.slice(0, maxOcrPages);
+  })();
+
+  const preparedPages = await mapWithConcurrency<BatchDocRow, PreparedPage | null>(batchDocsForOcr, 2, async (row): Promise<PreparedPage | null> => {
     const doc = row.doc;
-    if (!doc?.storage_bucket || !doc?.storage_path) continue;
+    if (!doc?.storage_bucket || !doc?.storage_path) return null;
     const mimeType = String(doc.mime_type || "application/octet-stream");
-    if (!isSupportedMimeType(mimeType)) continue;
+    if (!isSupportedMimeType(mimeType)) return null;
     const originalBytes = await downloadDocBytes(doc);
     const processed = await preprocessPdsPage({ bytes: originalBytes, mimeType, pageIndex: 0, dpi: 300 });
-    pages.push({
+    return {
       document_id: String(row.document_id),
       batch_id: row.batch_id,
       page_index: row.page_index,
@@ -323,8 +406,11 @@ export async function POST(request: Request) {
       processedPng: processed.buffer,
       preprocessDebug: processed.debug,
       filename: doc.original_filename ? String(doc.original_filename) : null,
-    });
-  }
+    };
+  });
+
+  const pages = preparedPages.filter(Boolean) as PreparedPage[];
+  firstOriginalBytesForSearchablePdf = pages[0]?.originalBytes ?? null;
 
   if (pages.length === 0) return new NextResponse("No supported documents to OCR", { status: 400 });
 
@@ -333,27 +419,29 @@ export async function POST(request: Request) {
     .sort((a, b) => (Number(a.page_index ?? 1e9) - Number(b.page_index ?? 1e9)) || String(a.document_id).localeCompare(String(b.document_id)));
 
   const pdfBuild = { pageIndexesUsed: sortedPages.map(p => p.page_index ?? 0) };
+  const docAiPdfBytes = (!hasClientTokens || clientTokensToNormalize.length > 0)
+    ? await buildMultipagePdfFromPngs(sortedPages.map((p) => p.processedPng))
+    : null;
 
   if (!hasClientTokens || clientTokensToNormalize.length > 0) {
     let didDocAi = false;
     let docAiErrMsg = "";
     let retryCount = 0;
     const maxRetries = 2;
-    
+
     while (!didDocAi && retryCount <= maxRetries) {
       try {
         const client = createDocumentAiClient();
         const name = getProcessorName();
-        const pdfBytes = await buildMultipagePdfFromPngs(sortedPages.map((p) => p.processedPng));
         const DOC_AI_TIMEOUT = 300000; // 5 minutes
-        
+
         console.log(`[OCR] Document AI attempt ${retryCount + 1}/${maxRetries + 1}`);
-        
+
         const processedDoc = await (client as any).processDocument(
           {
             name,
             rawDocument: {
-              content: pdfBytes,
+              content: docAiPdfBytes,
               mimeType: "application/pdf",
             },
           },
@@ -370,7 +458,7 @@ export async function POST(request: Request) {
       } catch (e) {
         docAiErrMsg = e instanceof Error ? e.message : String(e);
         console.error(`[OCR] Document AI FAILED (attempt ${retryCount + 1}):`, docAiErrMsg);
-        
+
         if (retryCount < maxRetries) {
           const delay = Math.pow(2, retryCount) * 1000; // 1s, 2s
           console.log(`[OCR] Retrying in ${delay}ms...`);
@@ -383,72 +471,67 @@ export async function POST(request: Request) {
     if (didDocAi) {
       // no-op, we already populated fullTextAll + tokensAll
     } else {
-    const allowFallbackOcr = String(process.env.ALLOW_FALLBACK_OCR || "1").trim() === "1" || String(process.env.ALLOW_FALLBACK_OCR || "").toLowerCase() === "true";
-    if (!allowFallbackOcr && !hasClientTokens) {
-      return new NextResponse(
-        JSON.stringify({
-          error: "OCR engine unavailable",
-          details: `Google Document AI failed and server fallback OCR is disabled.${docAiErrMsg ? ` Document AI error: ${docAiErrMsg}` : ""}`,
-          suggestion:
-            "Fix Google Document AI (billing/API/service account env vars) or set ALLOW_FALLBACK_OCR=1 to enable slower fallback OCR.",
-        }),
-        { status: 502, headers: { "Content-Type": "application/json" } }
-      );
-    }
+      const allowFallbackOcr = String(process.env.ALLOW_FALLBACK_OCR || "1").trim() === "1" || String(process.env.ALLOW_FALLBACK_OCR || "").toLowerCase() === "true";
+      if (!allowFallbackOcr && !hasClientTokens) {
+        return new NextResponse(
+          JSON.stringify({
+            error: "OCR engine unavailable",
+            details: `Google Document AI failed and server fallback OCR is disabled.${docAiErrMsg ? ` Document AI error: ${docAiErrMsg}` : ""}`,
+            suggestion:
+              "Fix Google Document AI (billing/API/service account env vars) or set ALLOW_FALLBACK_OCR=1 to enable slower fallback OCR.",
+          }),
+          { status: 502, headers: { "Content-Type": "application/json" } }
+        );
+      }
 
-    let sharpMod: any;
-    try {
-      sharpMod = (await import("sharp")).default;
-    } catch {
-      throw new Error("sharp not installed");
-    }
-
-    for (let i = 0; i < sortedPages.length; i++) {
-      const page = sortedPages[i];
+      let sharpMod: any;
       try {
-        const imgMetadata = await sharpMod(page.processedPng).metadata();
-        const resWidth = imgMetadata.width || 800;
-        const resHeight = imgMetadata.height || 800;
+        sharpMod = (await import("sharp")).default;
+      } catch {
+        throw new Error("sharp not installed");
+      }
 
-        const isTargetPageForClient = hasClientTokens && String(page.document_id) === String(extraction.document_id);
+      try {
+        const fallbackResults = await mapWithConcurrency(sortedPages, 2, async (page, i) => {
+          const imgMetadata = await sharpMod(page.processedPng).metadata();
+          const resWidth = imgMetadata.width || 800;
+          const resHeight = imgMetadata.height || 800;
 
-        if (isTargetPageForClient) {
-          // Normalize and Remap client-provided tokens to Legal space
-          // We apply .rotate() because browser OCR (tesseract) usually runs on the auto-oriented visible image.
-          const baseImg = sharpMod(page.originalBytes).rotate();
-          const origMetadata = await baseImg.metadata();
-          const origW = origMetadata.width || resWidth;
-          const origH = origMetadata.height || resHeight;
-          const cropBox = page.preprocessDebug?.cropBox || { left: 0, top: 0, width: origW, height: origH };
+          const isTargetPageForClient = hasClientTokens && String(page.document_id) === String(extraction.document_id);
 
-          const rawTokens = body.tokens as DocToken[];
-          const remapped = remapTokensToLegalSpace(rawTokens, origW, origH, cropBox);
-          
-          for (const t of remapped) {
-            tokensAll.push({
+          if (isTargetPageForClient) {
+            const baseImg = sharpMod(page.originalBytes).rotate();
+            const origMetadata = await baseImg.metadata();
+            const origW = origMetadata.width || resWidth;
+            const origH = origMetadata.height || resHeight;
+            const cropBox = page.preprocessDebug?.cropBox || { left: 0, top: 0, width: origW, height: origH };
+
+            const rawTokens = body.tokens as DocToken[];
+            const remapped = remapTokensToLegalSpace(rawTokens, origW, origH, cropBox).map((t) => ({
               ...t,
-              pageIndex: i, // Assign to correct index in the batch
-            });
+              pageIndex: i,
+            }));
+
+            console.log(`[OCR] Used remapped client tokens for page ${i} (${page.document_id})`);
+            return {
+              pageIndex: i,
+              text: String(body.full_text || ""),
+              tokens: remapped,
+            };
           }
-          fullTextAll += (body.full_text || "") + "\n\n";
-          console.log(`[OCR] Used remapped client tokens for page ${i} (${page.document_id})`);
-        } else {
-          // Server-side OCR (fallback engine) for this page
-          const resizedImageMod = sharpMod(page.processedPng)
-            .resize({ width: 1800, withoutEnlargement: true });
-          
-          const resizedMetadata = await resizedImageMod.metadata();
-          const rWidth = resizedMetadata.width || 1800;
-          const rHeight = resizedMetadata.height || 1800;
-          
-          const resizedImageBuffer = await resizedImageMod.toBuffer();
-          // Use Google Cloud Vision API instead of Tesseract (which doesn't work on Vercel)
-          const ocrResult = await withTimeout(performCloudVisionOcr(resizedImageBuffer, i), 45_000, `vision_ocr_page_${i}`);
-          
-          fullTextAll += ocrResult.text + "\n\n";
-          
-          for (const t of ocrResult.tokens) {
-            tokensAll.push({
+
+          const resized = await sharpMod(page.processedPng)
+            .resize({ width: 1800, withoutEnlargement: true })
+            .toBuffer({ resolveWithObject: true });
+
+          const rWidth = resized.info.width || 1800;
+          const rHeight = resized.info.height || 1800;
+          const ocrResult = await withTimeout(performCloudVisionOcr(resized.data, i), 45_000, `vision_ocr_page_${i}`);
+
+          return {
+            pageIndex: i,
+            text: ocrResult.text,
+            tokens: ocrResult.tokens.map((t) => ({
               pageIndex: i,
               text: t.text,
               confidence: t.confidence,
@@ -459,12 +542,17 @@ export async function POST(request: Request) {
                 maxY: t.box.maxY / rHeight,
                 midX: t.box.midX / rWidth,
                 midY: t.box.midY / rHeight,
-              }
-            });
-          }
+              },
+            })),
+          };
+        });
+
+        for (const result of fallbackResults) {
+          fullTextAll += result.text + "\n\n";
+          tokensAll.push(...result.tokens);
         }
       } catch (err: any) {
-        console.error("[OCR] OCR normalization/fallback failed for page", i, ":", err);
+        console.error("[OCR] OCR normalization/fallback failed:", err);
         await supabase
           .from("extractions")
           .update({
@@ -473,7 +561,7 @@ export async function POST(request: Request) {
             updated_by: updatedById,
           } as any)
           .eq("id", extractionId);
-        
+
         return new NextResponse(
           JSON.stringify({
             error: "OCR failed",
@@ -484,14 +572,13 @@ export async function POST(request: Request) {
         );
       }
     }
-    }
   }
 
   // BUILD SEARCHABLE PDF (Common for both paths if possible)
   try {
     const firstRow = batchDocs[0];
     const firstDoc = firstRow.doc;
-    const originalBytes = await downloadDocBytes(firstDoc);
+    const originalBytes = firstOriginalBytesForSearchablePdf ?? (await downloadDocBytes(firstDoc));
 
     const searchableResult = await buildSearchablePdfFromOriginalAndTokens({
       originalBytes,
@@ -527,12 +614,40 @@ export async function POST(request: Request) {
     pages: sortedPages.map(() => ({ tokens: [] })) // Dummy structure for legacy code compatibility
   };
 
+  function scorePage1FromText(text: string) {
+    const u = String(text || "").toUpperCase().replace(/\s+/g, "");
+    let score = 0;
+
+    if (u.includes("PERSONALDATASHEET")) score += 50;
+    if (u.includes("CSFORM") && u.includes("212")) score += 60;
+    if (u.includes("REVISED2017") || u.includes("REVISED2018") || u.includes("REVISED2025")) score += 30;
+    if (u.includes("PERSONAL") && u.includes("INFORMATION")) score += 80;
+    if (u.includes("SURNAME")) score += 35;
+    if (u.includes("FIRSTNAME")) score += 20;
+    if (u.includes("MIDDLENAME")) score += 20;
+    if (u.includes("DATEOFBIRTH") || u.includes("BIRTHDATE")) score += 25;
+    if (u.includes("SEXATBIRTH") || (u.includes("SEX") && u.includes("BIRTH"))) score += 15;
+    if (u.includes("CIVILSTATUS")) score += 10;
+    if (u.includes("CITIZENSHIP")) score += 10;
+    if (u.includes("RESIDENCETAX")) score += 10;
+
+    return score;
+  }
+
   function pageTextFromTokens(pageIndex: number) {
-    const toks = tokensAll.filter((t) => Number(t.pageIndex) === pageIndex);
+    const toks = tokensByPage.get(pageIndex) || [];
     return toks
       .map((t) => String((t as any).text || "").trim())
       .filter(Boolean)
       .join(" ");
+  }
+
+  const tokensByPage = new Map<number, DocToken[]>();
+  for (const token of tokensAll) {
+    const idx = Number(token.pageIndex || 0);
+    const existing = tokensByPage.get(idx);
+    if (existing) existing.push(token);
+    else tokensByPage.set(idx, [token]);
   }
 
   const pageViews = sortedPages.map((p, i) => {
@@ -543,7 +658,7 @@ export async function POST(request: Request) {
     return {
       pageIndex,
       pageText,
-      tokens: tokensAll.filter((t) => Number(t.pageIndex) === pageIndex),
+      tokens: tokensByPage.get(pageIndex) || [],
       template,
       page1Score,
       page: p,
@@ -553,20 +668,25 @@ export async function POST(request: Request) {
   const page1 = pageViews.slice().sort((a, b) => b.page1Score - a.page1Score)[0];
   const chosenExtractionId = String(extractionId);
   const chosenPageIndex = page1?.page?.page_index ?? null;
+  function buildSinglePageDoc(view: ((typeof pageViews)[number]) | undefined) {
+    const viewDocAiIndex = Number(view?.pageIndex ?? 0);
+    return {
+      ...(document || {}),
+      pages: Array.isArray((document as any)?.pages)
+        ? [((document as any).pages || [])[viewDocAiIndex]].filter(Boolean)
+        : [],
+      text: fullTextAll,
+      tokens: ((view?.tokens || []) as any[]).map((t: any) => ({ ...t, pageIndex: 0 })),
+    };
+  }
 
   // Owner/DOB extraction helpers currently assume pageIndex=0 in the Document AI output.
   // Build a page-local "document" view for the chosen page by reindexing it to 0.
   const chosenPageDocAiIndex = Number(page1?.pageIndex ?? 0);
-  const page1Doc: any = {
-    ...(document || {}),
-    pages: Array.isArray((document as any)?.pages)
-      ? [((document as any).pages || [])[chosenPageDocAiIndex]].filter(Boolean)
-      : [],
-    // IMPORTANT: Keep the original full-text so textAnchor indices remain valid.
-    // We only subset pages to make chosen page become pageIndex=0 for downstream extractors.
-    text: fullTextAll,
-    tokens: (page1?.tokens || []).map((t: any) => ({ ...t, pageIndex: 0 })),
-  };
+  let chosenOwnerPage = page1;
+  let chosenOwnerPageIndex = chosenPageIndex;
+  let chosenOwnerPageDocAiIndex = chosenPageDocAiIndex;
+  let chosenOwnerPageDoc: any = buildSinglePageDoc(page1);
 
   const templateAcross = (() => {
     const nonUnknown = pageViews.find((r) => r.template.version !== "unknown");
@@ -661,9 +781,11 @@ export async function POST(request: Request) {
   let appointmentData: any = null;
   let appointmentDebug: any = null;
   let ownerCandidate: any = null;
+  let ownerMethodUsed: string | null = null;
   let ownerEmployeeId: string | null = null;
   let ownerLinkWarning: string | null = null;
   let photoDebug: any = { warnings: [] };
+  let pdsPageEvaluations: any[] = [];
   
   // Variables for extraction debug (initialized for all types)
   let anchor: any = null;
@@ -723,6 +845,7 @@ export async function POST(request: Request) {
         middle_name: appointmentData.owner.middle_name,
         confidence: 0.9,
       };
+      ownerMethodUsed = "appointment_extraction";
     }
 
     // Link employee and update masterlist appointment fields
@@ -781,108 +904,205 @@ export async function POST(request: Request) {
 
   // === TYPE B: PDS - Personal info extraction ONLY (no job fields) ===
   if (docTypeFinal === "pds") {
-    const page1TemplateVersion = templateAcross.version;
-    console.log("[DEBUG PDS] Starting PDS extraction, template version:", page1TemplateVersion);
-    
-    anchor = extractOwnerByAnchors(page1Doc, { templateVersion: page1TemplateVersion });
-    console.log("[DEBUG PDS] Anchor extraction result:", {
-      hasOwner: !!anchor.owner,
-      owner: anchor.owner,
-      debug: anchor.debug,
-    });
-    
-    roi = (() => {
-      if (page1TemplateVersion === "2018") return extractOwnerFromTokensRoi2018(page1Doc);
-      if (page1TemplateVersion === "2025") return extractOwnerFromTokensRoi(page1Doc);
-      // Unknown template: try 2025 ROI first, fall back to 2018 ROI.
-      const r2025 = extractOwnerFromTokensRoi(page1Doc);
-      if (r2025.owner) return r2025;
-      return extractOwnerFromTokensRoi2018(page1Doc);
-    })();
-    
-    console.log("[DEBUG PDS] ROI extraction result:", {
-      hasOwner: !!(roi as any).owner,
-      owner: (roi as any).owner,
-    });
+    const pdsCandidatePages = pageViews
+      .slice()
+      .sort((a, b) => b.page1Score - a.page1Score || a.pageIndex - b.pageIndex)
+      .slice(0, Math.min(4, pageViews.length));
 
-    // ROI extractor uses calibrated fixed template coordinates — prefer it over anchor.
-    ownerCandidate = (roi as any).owner ?? anchor.owner ?? null;
-    console.log("[DEBUG PDS] Combined owner candidate:", ownerCandidate);
-    
-    // FALLBACK: Use spatial extractor (token positions) — more reliable than text-only regex.
-    if (!ownerCandidate) {
-      console.log("[DEBUG PDS] ROI failed, trying spatial token extractor...");
-      const spatial = detectPdsOwnerCandidateFromDocument(page1Doc);
-      console.log("[DEBUG PDS] Spatial result:", spatial);
-      if (spatial?.last_name && spatial?.first_name) {
-        ownerCandidate = spatial as any;
-      } else {
-        // Last resort: text regex (works only when OCR preserves line breaks).
-        const textFallback = extractPdsOwnerFromTextFallback(fullTextAll);
-        console.log("[DEBUG PDS] Text fallback result:", textFallback);
-        if (textFallback) ownerCandidate = textFallback as any;
-      }
-    }
+    const runPdsExtractionForPage = async (candidatePage: any) => {
+      const candidateTemplateVersion: PdsTemplateVersion =
+        candidatePage?.template?.version === "2018" || candidatePage?.template?.version === "2025"
+          ? candidatePage.template.version
+          : templateAcross.version === "2018" || templateAcross.version === "2025"
+            ? templateAcross.version
+            : "unknown";
+      const candidateDoc = buildSinglePageDoc(candidatePage);
 
-    dobRow = extractDobFromPersonalInfoRow(page1Doc, { templateVersion: page1TemplateVersion });
-    console.log("[DEBUG PDS] DOB extraction result:", dobRow);
-    
-    if (dobRow.iso && ownerCandidate) {
-      ownerCandidate = {
-        ...ownerCandidate,
-        date_of_birth: dobRow.iso,
-        confidence: Math.max((ownerCandidate as any).confidence ?? 0, 0.99),
-      };
-    }
+      const candidateAnchor = extractOwnerByAnchors(candidateDoc, { templateVersion: candidateTemplateVersion });
+      const candidateRoi = (() => {
+        if (candidateTemplateVersion === "2018") return extractOwnerFromTokensRoi2018(candidateDoc);
+        if (candidateTemplateVersion === "2025") return extractOwnerFromTokensRoi(candidateDoc);
+        const r2025 = extractOwnerFromTokensRoi(candidateDoc);
+        if (r2025.owner) return r2025;
+        return extractOwnerFromTokensRoi2018(candidateDoc);
+      })();
 
-    sex = await extractSexAtBirth(page1Doc, {
-      templateVersion: page1TemplateVersion,
-      originalMimeType: "image/png",
-      originalBytes: page1?.page?.processedPng,
-    });
-    console.log("[DEBUG PDS] Sex extraction result:", sex);
+      let candidateOwnerMethod: string | null = (candidateRoi as any).owner ? "roi" : candidateAnchor.owner ? "anchor" : null;
+      let candidateOwner = (candidateRoi as any).owner ?? candidateAnchor.owner ?? null;
 
-    if (ownerCandidate && sex.value && !(ownerCandidate as any).gender) {
-      (ownerCandidate as any).gender = sex.value;
-    }
-
-    // Strict validation is for text fallbacks; spatial (anchor/ROI) names often trip label-token
-    // heuristics even when the values are correct — keep those unless obviously empty/junk.
-    if (ownerCandidate) {
-      const spatialSource = Boolean(anchor?.owner || (roi as any)?.owner);
-      const rawLast = String((ownerCandidate as any).last_name || "").trim();
-      const rawFirst = String((ownerCandidate as any).first_name || "").trim();
-      const vLast = validatePersonName(rawLast, "last");
-      const vFirst = validatePersonName(rawFirst, "first");
-
-      if (vLast.ok && vFirst.ok) {
-        ownerCandidate = {
-          ...ownerCandidate,
-          last_name: vLast.value,
-          first_name: vFirst.value,
-        };
-      } else if (
-        spatialSource &&
-        rawLast.length >= 2 &&
-        rawFirst.length >= 2 &&
-        /[A-Za-zÀ-ÿ]/.test(rawLast) &&
-        /[A-Za-zÀ-ÿ]/.test(rawFirst) &&
-        !looksLikePlaceholderName(rawLast) &&
-        !looksLikePlaceholderName(rawFirst)
-      ) {
-        console.log("[DEBUG PDS] Keeping spatial owner despite validatePersonName:", {
-          vLast: vLast.reasons,
-          vFirst: vFirst.reasons,
-        });
-      } else {
-        const conf = Number((ownerCandidate as any).confidence ?? 0);
-        const isFallback = conf > 0 && conf < 0.8;
-        if (!(isFallback && rawLast && rawFirst)) {
-          console.log("[DEBUG PDS] Validation failed - clearing owner candidate", { vLast, vFirst, spatialSource });
-          ownerCandidate = null;
+      if (!candidateOwner) {
+        const spatial = detectPdsOwnerCandidateFromDocument(candidateDoc);
+        if (spatial?.last_name && spatial?.first_name) {
+          candidateOwner = spatial as any;
+          candidateOwnerMethod = "spatial";
+        } else {
+          const textFallback = extractPdsOwnerFromTextFallback(String(candidatePage?.pageText || "") || fullTextAll);
+          if (textFallback) {
+            candidateOwner = textFallback as any;
+            candidateOwnerMethod = "text_fallback";
+          }
         }
       }
+
+      const candidateDob = extractDobFromPersonalInfoRow(candidateDoc, { templateVersion: candidateTemplateVersion });
+
+      if (candidateDob.iso && candidateOwner) {
+        candidateOwner = {
+          ...candidateOwner,
+          date_of_birth: candidateDob.iso,
+          confidence: Math.max((candidateOwner as any).confidence ?? 0, 0.99),
+        };
+      }
+
+      const candidateSex = await extractSexAtBirth(candidateDoc, {
+        templateVersion: candidateTemplateVersion,
+        originalMimeType: "image/png",
+        originalBytes: candidatePage?.page?.processedPng,
+      });
+
+      if (candidateOwner && candidateSex.value && !(candidateOwner as any).gender) {
+        (candidateOwner as any).gender = candidateSex.value;
+      }
+
+      if (candidateOwner) {
+        candidateOwner = sanitizeOwnerCandidateNames(candidateOwner);
+      }
+
+      if (candidateOwner) {
+        const spatialSource = Boolean(candidateAnchor?.owner || (candidateRoi as any)?.owner);
+        const rawLast = String((candidateOwner as any).last_name || "").trim();
+        const rawFirst = String((candidateOwner as any).first_name || "").trim();
+        const vLast = validatePersonName(rawLast, "last");
+        const vFirst = validatePersonName(rawFirst, "first");
+
+        if (vLast.ok && vFirst.ok) {
+          candidateOwner = {
+            ...candidateOwner,
+            last_name: vLast.value,
+            first_name: vFirst.value,
+          };
+        } else if (
+          spatialSource &&
+          rawLast.length >= 2 &&
+          rawFirst.length >= 2 &&
+          /[A-Za-zÀ-ÿ]/.test(rawLast) &&
+          /[A-Za-zÀ-ÿ]/.test(rawFirst) &&
+          !looksLikePlaceholderName(rawLast) &&
+          !looksLikePlaceholderName(rawFirst)
+        ) {
+          console.log("[DEBUG PDS] Keeping spatial owner despite validatePersonName:", {
+            pageIndex: candidatePage?.page?.page_index ?? null,
+            vLast: vLast.reasons,
+            vFirst: vFirst.reasons,
+          });
+        } else {
+          const conf = Number((candidateOwner as any).confidence ?? 0);
+          const isFallback = conf > 0 && conf < 0.8;
+          if (!(isFallback && rawLast && rawFirst)) {
+            console.log("[DEBUG PDS] Validation failed - clearing owner candidate", {
+              pageIndex: candidatePage?.page?.page_index ?? null,
+              vLast,
+              vFirst,
+              spatialSource,
+            });
+            candidateOwner = null;
+            candidateOwnerMethod = null;
+          }
+        }
+      }
+
+      const last = String((candidateOwner as any)?.last_name || "").trim();
+      const first = String((candidateOwner as any)?.first_name || "").trim();
+      const middle = String((candidateOwner as any)?.middle_name || "").trim();
+      let score = Math.max(0, Number(candidatePage?.page1Score || 0) / 25);
+      if (last) score += 6;
+      if (first) score += 6;
+      if (last && first) score += 12;
+      if (middle) score += 2;
+      if (candidateDob.iso) score += 5;
+      if (candidateSex.value) score += 2;
+
+      pdsPageEvaluations.push({
+        document_id: candidatePage?.page?.document_id ?? null,
+        page_index: candidatePage?.page?.page_index ?? null,
+        pageIndexDocAi: candidatePage?.pageIndex ?? null,
+        page1Score: candidatePage?.page1Score ?? null,
+        templateVersion: candidateTemplateVersion,
+        ownerMethod: candidateOwnerMethod,
+        hasOwner: Boolean(last && first),
+        hasDob: Boolean(candidateDob.iso),
+        hasSex: Boolean(candidateSex.value),
+        score,
+        textLength: String(candidatePage?.pageText || "").length,
+      });
+
+      return {
+        page: candidatePage,
+        pageDoc: candidateDoc,
+        templateVersion: candidateTemplateVersion,
+        anchor: candidateAnchor,
+        roi: candidateRoi,
+        ownerCandidate: candidateOwner,
+        ownerMethod: candidateOwnerMethod,
+        dobRow: candidateDob,
+        sex: candidateSex,
+        score,
+      };
+    };
+
+    let bestAttempt: any = null;
+    for (const candidatePage of pdsCandidatePages) {
+      const attempt = await runPdsExtractionForPage(candidatePage);
+      console.log("[DEBUG PDS] Page extraction attempt:", {
+        pageIndex: candidatePage?.page?.page_index ?? null,
+        pageIndexDocAi: candidatePage?.pageIndex ?? null,
+        page1Score: candidatePage?.page1Score ?? null,
+        ownerMethod: attempt.ownerMethod,
+        owner: attempt.ownerCandidate,
+        dob: attempt.dobRow?.iso ?? null,
+        sex: attempt.sex?.value ?? null,
+        score: attempt.score,
+      });
+
+      if (!bestAttempt) {
+        bestAttempt = attempt;
+        continue;
+      }
+
+      const bestHasOwner = Boolean(bestAttempt?.ownerCandidate?.last_name && bestAttempt?.ownerCandidate?.first_name);
+      const curHasOwner = Boolean(attempt?.ownerCandidate?.last_name && attempt?.ownerCandidate?.first_name);
+      if (curHasOwner !== bestHasOwner) {
+        if (curHasOwner) bestAttempt = attempt;
+        continue;
+      }
+
+      if (Number(attempt?.score || 0) > Number(bestAttempt?.score || 0)) {
+        bestAttempt = attempt;
+      }
     }
+
+    if (bestAttempt) {
+      chosenOwnerPage = bestAttempt.page;
+      chosenOwnerPageIndex = bestAttempt.page?.page?.page_index ?? chosenOwnerPageIndex;
+      chosenOwnerPageDocAiIndex = Number(bestAttempt.page?.pageIndex ?? chosenOwnerPageDocAiIndex);
+      chosenOwnerPageDoc = bestAttempt.pageDoc;
+      anchor = bestAttempt.anchor;
+      roi = bestAttempt.roi;
+      ownerCandidate = bestAttempt.ownerCandidate;
+      ownerMethodUsed = bestAttempt.ownerMethod;
+      dobRow = bestAttempt.dobRow;
+      sex = bestAttempt.sex;
+    }
+
+    console.log("[DEBUG PDS] Selected page result:", {
+      pageIndex: chosenOwnerPageIndex,
+      pageIndexDocAi: chosenOwnerPageDocAiIndex,
+      page1Score: chosenOwnerPage?.page1Score ?? null,
+      ownerMethodUsed,
+      owner: ownerCandidate,
+      dob: dobRow.iso,
+      sex: sex.value,
+    });
 
     // NOTE: Anchor last-resort removed — anchor reads entire header row as extractedRaw
     // which produces junk like "SURNAME FIRST NAME ABABAN ADONIS NAME EXTENSION JR SR".
@@ -944,14 +1164,21 @@ export async function POST(request: Request) {
   // employee_id must be set manually or via previous linking
 
   // Link document to employee_id if found
-  if (ownerEmployeeId && page1?.page?.document_id) {
-    await supabase.from("employee_documents").update({ employee_id: ownerEmployeeId }).eq("id", page1.page.document_id);
+  if (ownerEmployeeId && chosenOwnerPage?.page?.document_id) {
+    await supabase.from("employee_documents").update({ employee_id: ownerEmployeeId }).eq("id", chosenOwnerPage.page.document_id);
     await supabase.from("extractions").update({ linked_employee_id: ownerEmployeeId } as any).eq("id", chosenExtractionId);
   }
 
   // Photo extraction after ownerEmployeeId is computed (best-effort)
+  if (docTypeFinal === "pds") {
   try {
-    const photoScores = pageViews.map((r) => {
+    const photoRelevantPages = pageViews.filter((r) => {
+      if (Number(r.pageIndex) === chosenOwnerPageDocAiIndex) return true;
+      const txt = String(r.pageText || "").toUpperCase();
+      return txt.includes("PHOTO") || txt.includes("THUMB") || txt.includes("THUMBMARK");
+    });
+
+    const photoScores = photoRelevantPages.map((r) => {
       const s = scorePhotoPageFromTextAndTokens({ fullText: r.pageText, tokens: r.tokens as any });
       const pageIdx = typeof r.page.page_index === "number" ? Number(r.page.page_index) : null;
 
@@ -960,7 +1187,9 @@ export async function POST(request: Request) {
       const hasThumb = txt.includes("RIGHT THUM") || txt.includes("RIGHT  THUM") || txt.includes("THUMBMARK");
       const hasSworn = txt.includes("SUBSCRIB") || txt.includes("SWORN") || txt.includes("OATH");
       const hasAdmin = txt.includes("ADMINISTER");
-      const hasAnyAnchor = hasPhoto || hasThumb || hasSworn || hasAdmin;
+      const isChosenPage = Number(r.pageIndex) === chosenOwnerPageDocAiIndex;
+      const hasExplicitAnchor = hasPhoto || hasThumb || hasSworn || hasAdmin;
+      const hasAnyAnchor = isChosenPage || hasExplicitAnchor;
 
       return {
         r,
@@ -969,6 +1198,8 @@ export async function POST(request: Request) {
         photoTokenCandidates: s.photoTokenCandidates,
         pageIdx,
         hasBoth: hasPhoto && hasThumb,
+        hasExplicitAnchor,
+        isChosenPage,
         hasAnyAnchor,
       };
     });
@@ -981,7 +1212,8 @@ export async function POST(request: Request) {
     const eligible = photoScores.filter((p) => p.hasAnyAnchor);
     const eligibleSorted = eligible
       .slice()
-      .sort((a, b) => (b.hasBoth ? 1 : 0) - (a.hasBoth ? 1 : 0) || b.score - a.score);
+      .sort((a, b) => (b.hasBoth ? 1 : 0) - (a.hasBoth ? 1 : 0) || (b.hasExplicitAnchor ? 1 : 0) - (a.hasExplicitAnchor ? 1 : 0) || b.score - a.score || (b.isChosenPage ? 1 : 0) - (a.isChosenPage ? 1 : 0))
+      .slice(0, 3);
 
     type PageAttempt = {
       pageIdx: number | null;
@@ -1194,6 +1426,7 @@ export async function POST(request: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     photoDebug.warnings.push(`photo_extract_failed:${msg}`);
   }
+  }
 
   (photoDebug as any).pageCount = pageCount;
 
@@ -1223,6 +1456,18 @@ export async function POST(request: Request) {
     }
   }
 
+  const hasDetectedOwner = Boolean(ownerCandidate && (ownerCandidate as any).last_name && (ownerCandidate as any).first_name);
+  const ownerPendingReason = hasDetectedOwner && !ownerEmployeeId
+    ? "owner_detected_but_not_registered"
+    : null;
+  const extractionStatusFinal = ownerPendingReason ? "pending" : "extracted";
+  const warningsFinal = ownerLinkWarning || ownerPendingReason
+    ? {
+        ...(ownerLinkWarning ? { owner_link: ownerLinkWarning } : {}),
+        ...(ownerPendingReason ? { owner_pending: ownerPendingReason } : {}),
+      }
+    : null;
+
   await supabase
     .from("extractions")
     .update({
@@ -1245,12 +1490,13 @@ export async function POST(request: Request) {
             },
           },
           formFieldCount: null,
-          tokenCount: page1.tokens?.length ?? null,
-          ownerMethod: ownerCandidate ? ((anchor as any)?.owner ? "anchor" : (roi as any)?.owner ? "roi" : "appointment_extraction") : null,
+          tokenCount: chosenOwnerPage?.tokens?.length ?? null,
+          ownerMethod: ownerCandidate ? ownerMethodUsed : null,
           ownerLinkWarning,
+          ownerPendingReason,
           owner: {
-            methodUsed: ownerCandidate ? ((anchor as any)?.owner ? "anchor" : (roi as any)?.owner ? "roi" : "appointment_extraction") : null,
-            pageChosen: { extraction_id: chosenExtractionId, page_index: chosenPageIndex },
+            methodUsed: ownerCandidate ? ownerMethodUsed : null,
+            pageChosen: { extraction_id: chosenExtractionId, page_index: chosenOwnerPageIndex },
             personalInfoRangeY: (anchor as any)?.debug?.personalInfoRangeY ?? null,
             labelCandidates: (anchor as any)?.debug?.fields
               ? {
@@ -1276,7 +1522,8 @@ export async function POST(request: Request) {
                   date_of_birth: (anchor as any).debug.fields.date_of_birth.selectedTokens ?? null,
                 }
               : null,
-            validationReasons: (page1 as any).__ownerValidationReasons ?? null,
+            validationReasons: (chosenOwnerPage as any)?.__ownerValidationReasons ?? null,
+            pageEvaluations: pdsPageEvaluations,
           },
           sex: {
             method: sex.debug.method,
@@ -1324,14 +1571,14 @@ export async function POST(request: Request) {
             rawDebug: dobRow.debug,
           },
           template: templateAcross,
-          preprocess: page1?.page?.preprocessDebug ?? null,
+          preprocess: chosenOwnerPage?.page?.preprocessDebug ?? null,
           batch: {
             documentSetId: (extraction as any).document_set_id ? String((extraction as any).document_set_id) : null,
             batchId: (extraction as any).batch_id ? String((extraction as any).batch_id) : null,
             pageCount,
             pagesProcessed: pageViews.length,
             pageIndexesUsed: pdfBuild.pageIndexesUsed,
-            pageChosen: { extraction_id: chosenExtractionId, page_index: chosenPageIndex, score: page1.page1Score },
+            pageChosen: { extraction_id: chosenExtractionId, page_index: chosenOwnerPageIndex, score: chosenOwnerPage?.page1Score ?? null },
             pages: pageViews.map((r) => ({
               document_id: r.page.document_id,
               page_index: r.page.page_index,
@@ -1353,8 +1600,8 @@ export async function POST(request: Request) {
           snippet: r.pageText.slice(0, 300),
         })),
       },
-      warnings: ownerLinkWarning ? { owner_link: ownerLinkWarning } : null,
-      status: "extracted",
+      warnings: warningsFinal,
+      status: extractionStatusFinal,
       document_type: docTypeFinal,
       appointment_data: docTypeFinal === "appointment" ? appointmentData : null,
       extraction_debug: {
@@ -1435,7 +1682,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     extraction_id: chosenExtractionId,
     batch_id: (extraction as any).batch_id ? String((extraction as any).batch_id) : null,
-    page_chosen: { extraction_id: chosenExtractionId, page_index: chosenPageIndex, score: page1.page1Score },
+    page_chosen: { extraction_id: chosenExtractionId, page_index: chosenOwnerPageIndex, score: chosenOwnerPage?.page1Score ?? null },
     pageCount,
     pagesProcessed: pageViews.length,
     textLength: (pageViews.find((p) => p.pageIndex === 0)?.pageText ?? fullTextAll).length,

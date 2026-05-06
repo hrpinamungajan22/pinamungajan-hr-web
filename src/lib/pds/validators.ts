@@ -126,9 +126,11 @@ export function validatePersonName(raw: string, which: "last" | "first" | "middl
   if (toks.length === 1) {
     const t = toks[0].toUpperCase();
     if (LABEL_SET.has(t)) reasons.push("stopword_or_label_single_token");
-    // Middle names can legitimately be short (e.g. "LU") or an initial.
-    // Still reject label/stop words via LABEL_SET above.
-    if (which !== "middle" && t.length <= 3 && !ALLOWED_SHORT.has(t)) reasons.push("too_short_single_token");
+    if (which === "last") {
+      if (t.length <= 1 && !ALLOWED_SHORT.has(t)) reasons.push("too_short_single_token");
+    } else if (which !== "middle") {
+      if (t.length <= 3 && !ALLOWED_SHORT.has(t)) reasons.push("too_short_single_token");
+    }
   }
 
   const stopTok = toks.find((t) => LABEL_SET.has(t.toUpperCase()));

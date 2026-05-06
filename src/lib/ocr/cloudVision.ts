@@ -2,6 +2,9 @@ import vision from "@google-cloud/vision";
 import { assertServiceAccountJsonFileExists } from "@/lib/gcp/credentialsEnv";
 import type { DocToken } from "../pds/documentAiTokens";
 
+let cachedVisionCredentials: any | null | undefined;
+let cachedVisionClient: any = null;
+
 function readEnv(...keys: string[]) {
   for (const k of keys) {
     const v = process.env[k];
@@ -54,8 +57,11 @@ export async function performCloudVisionOcr(
   tokens: DocToken[];
   confidence: number;
 }> {
-  const credentialsJsonRaw = readEnv("GCP_SERVICE_ACCOUNT_JSON", "GOOGLE_CLOUD_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS_JSON");
-  const credentials = credentialsJsonRaw ? parseServiceAccountJson(credentialsJsonRaw) : null;
+  if (cachedVisionCredentials === undefined) {
+    const credentialsJsonRaw = readEnv("GCP_SERVICE_ACCOUNT_JSON", "GOOGLE_CLOUD_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS_JSON");
+    cachedVisionCredentials = credentialsJsonRaw ? parseServiceAccountJson(credentialsJsonRaw) : null;
+  }
+  const credentials = cachedVisionCredentials;
 
   if (credentials) {
     const hasEmail = typeof (credentials as any).client_email === "string" && String((credentials as any).client_email).trim();
@@ -72,9 +78,12 @@ export async function performCloudVisionOcr(
     if (adc) assertServiceAccountJsonFileExists(adc, "GOOGLE_APPLICATION_CREDENTIALS");
   }
 
-  const client = credentials
-    ? new vision.ImageAnnotatorClient({ credentials })
-    : new vision.ImageAnnotatorClient();
+  if (!cachedVisionClient) {
+    cachedVisionClient = credentials
+      ? new vision.ImageAnnotatorClient({ credentials })
+      : new vision.ImageAnnotatorClient();
+  }
+  const client = cachedVisionClient;
 
   const [result] = await client.textDetection({
     image: { content: imageBuffer },

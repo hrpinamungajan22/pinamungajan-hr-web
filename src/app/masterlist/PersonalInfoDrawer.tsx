@@ -26,6 +26,8 @@ interface CategorizedDocument {
   document_set_id?: string | null;
   created_at?: string;
   detection_confidence?: number;
+  download_url?: string | null;
+  link_source?: string | null;
   extraction?: {
     id: string;
     status: string;
@@ -83,21 +85,21 @@ function getCategoryLabel(category: DocumentCategory): string {
 
 function getCategoryColor(category: DocumentCategory): string {
   const colors: Record<DocumentCategory, string> = {
-    pds: "bg-blue-50 border-blue-200",
-    appointment: "bg-green-50 border-green-200",
-    oath: "bg-indigo-50 border-indigo-200",
-    assumption: "bg-teal-50 border-teal-200",
-    certification_lgu: "bg-purple-50 border-purple-200",
-    nosa: "bg-amber-50 border-amber-200",
-    nosi: "bg-orange-50 border-orange-200",
-    ipcr: "bg-cyan-50 border-cyan-200",
-    service_record: "bg-rose-50 border-rose-200",
-    training: "bg-emerald-50 border-emerald-200",
-    eligibility: "bg-violet-50 border-violet-200",
-    photo: "bg-pink-50 border-pink-200",
-    other: "bg-slate-50 border-slate-200",
+    pds: "border-app-primary/25 bg-app-primary/5",
+    appointment: "border-app-success/25 bg-app-success/8",
+    oath: "border-app-primary/20 bg-app-surface-muted",
+    assumption: "border-app-primary/20 bg-app-surface-muted",
+    certification_lgu: "border-app-primary/20 bg-app-surface-muted",
+    nosa: "border-app-warning/25 bg-app-warning-muted",
+    nosi: "border-app-warning/25 bg-app-warning-muted",
+    ipcr: "border-app-primary/20 bg-app-surface-muted",
+    service_record: "border-app-primary/20 bg-app-surface-muted",
+    training: "border-app-success/25 bg-app-success/8",
+    eligibility: "border-app-primary/20 bg-app-surface-muted",
+    photo: "border-app-primary/20 bg-app-surface-muted",
+    other: "border-app-border bg-app-surface-muted",
   };
-  return colors[category] || "bg-slate-50 border-slate-200";
+  return colors[category] || "border-app-border bg-app-surface-muted";
 }
 
 export function PersonalInfoDrawer({
@@ -250,18 +252,18 @@ export function PersonalInfoDrawer({
       />
 
       <div
-        className={`absolute right-0 top-0 h-full w-full max-w-[420px] bg-white shadow-xl transition-transform ${
+        className={`absolute right-0 top-0 h-full w-full max-w-[420px] border-l border-app-border bg-app-surface shadow-xl transition-transform ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between border-b px-4 py-3">
+        <div className="flex items-center justify-between border-b border-app-border px-4 py-3">
           <div>
-            <div className="text-sm font-semibold text-slate-900">Personal Info</div>
-            <div className="text-xs text-slate-600">{employee ? fullName : ""}</div>
+            <div className="text-sm font-semibold text-app-text">Personal Info</div>
+            <div className="text-xs text-app-muted">{employee ? fullName : ""}</div>
           </div>
           <button
             type="button"
-            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 hover:bg-slate-50"
+            className="app-btn-secondary rounded-md px-2 py-1 text-sm"
             onClick={onClose}
           >
             Close
@@ -270,29 +272,29 @@ export function PersonalInfoDrawer({
 
         <div className="h-[calc(100%-52px)] overflow-auto px-4 py-4">
           {state.status === "loading" ? (
-            <div className="text-sm text-slate-700">Loading…</div>
+            <div className="text-sm text-app-muted">Loading…</div>
           ) : null}
 
           {state.status === "error" ? (
-            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <div className="app-alert-danger rounded-md px-3 py-2 text-sm">
               {state.message}
             </div>
           ) : null}
 
           {state.status === "ready" && employee ? (
             <div className="flex flex-col gap-4">
-              <div className="rounded-lg border bg-slate-50 p-3">
-                <div className="text-xs font-semibold text-slate-900">Photo</div>
+              <div className="rounded-lg border border-app-border bg-app-surface-muted p-3">
+                <div className="text-xs font-semibold text-app-text">Photo</div>
                 <div className="mt-2">
                   {photo?.signed_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={photo.signed_url}
                       alt="Employee photo"
-                      className="h-40 w-40 rounded-lg border object-cover"
+                      className="h-40 w-40 rounded-lg border border-app-border object-cover"
                     />
                   ) : (
-                    <div className="flex h-40 w-40 items-center justify-center rounded-lg border bg-white text-xs text-slate-500">
+                    <div className="flex h-40 w-40 items-center justify-center rounded-lg border border-app-border bg-app-surface text-xs text-app-muted">
                       No photo
                     </div>
                   )}
@@ -310,17 +312,17 @@ export function PersonalInfoDrawer({
                         e.currentTarget.value = "";
                       }}
                     />
-                    <span className="inline-flex cursor-pointer items-center rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900 hover:bg-slate-50">
+                    <span className="app-btn-secondary inline-flex cursor-pointer items-center rounded-md px-2 py-1 text-xs font-semibold">
                       Upload photo
                     </span>
                   </label>
                 </div>
 
                 {uploadState.status === "uploading" ? (
-                  <div className="mt-2 text-xs text-slate-700">{uploadState.message}</div>
+                  <div className="mt-2 text-xs text-app-muted">{uploadState.message}</div>
                 ) : null}
                 {uploadState.status === "error" ? (
-                  <div className="mt-2 text-xs text-red-700">{uploadState.message}</div>
+                  <div className="mt-2 text-xs text-app-danger">{uploadState.message}</div>
                 ) : null}
               </div>
 
@@ -340,13 +342,13 @@ export function PersonalInfoDrawer({
                 <InfoRow label="Gender" value={employee.gender ?? ""} />
               </div>
 
-              <div className="rounded-lg border bg-slate-50 p-3">
+              <div className="rounded-lg border border-app-border bg-app-surface-muted p-3">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold text-slate-900">Uploaded files</div>
+                  <div className="text-xs font-semibold text-app-text">Uploaded files</div>
                   {documents.length > 0 && (
                     <button
                       type="button"
-                      className="inline-flex items-center rounded border border-slate-300 bg-white px-2 py-1 text-[10px] text-slate-700 hover:bg-slate-50"
+                      className="app-btn-secondary inline-flex items-center rounded px-2 py-1 text-[10px]"
                       onClick={() => {
                         const url = `/api/documents/download?employee_id=${employeeId}&doc_type=all&format=zip`;
                         window.open(url, "_blank");
@@ -358,7 +360,7 @@ export function PersonalInfoDrawer({
                   )}
                 </div>
                 {documents.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-600">No uploaded files linked to this employee yet.</div>
+                  <div className="mt-2 text-xs text-app-muted">No uploaded files linked to this employee yet.</div>
                 ) : (
                   <div className="mt-2 flex flex-col gap-3">
                     {(() => {
@@ -409,12 +411,12 @@ export function PersonalInfoDrawer({
                         .map((cat) => (
                           <div key={cat} className={`rounded-lg border p-2 ${getCategoryColor(cat)}`}>
                             <div className="mb-2 flex items-center justify-between">
-                              <div className="text-xs font-semibold text-slate-900">{getCategoryLabel(cat)}</div>
+                              <div className="text-xs font-semibold text-app-text">{getCategoryLabel(cat)}</div>
                               <div className="flex items-center gap-2">
-                                <div className="text-[10px] text-slate-600">{byCategory[cat].length} doc(s)</div>
+                                <div className="text-[10px] text-app-muted">{byCategory[cat].length} doc(s)</div>
                                 <button
                                   type="button"
-                                  className="inline-flex items-center rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 hover:bg-slate-50"
+                                  className="app-btn-secondary inline-flex items-center rounded px-1.5 py-0.5 text-[10px]"
                                   onClick={() => {
                                     const url = `/api/documents/download?employee_id=${employeeId}&doc_type=${cat}&format=zip`;
                                     window.open(url, "_blank");
@@ -426,43 +428,46 @@ export function PersonalInfoDrawer({
                               </div>
                             </div>
                             <div className="grid gap-2">
-                              {byCategory[cat].map((set) => (
-                                <div key={set.id} className="rounded-md border bg-white px-2 py-2">
+                              {byCategory[cat].map((set) => {
+                                const extractionTypeBadgeClass = set.firstDoc.extraction?.document_type
+                                  ? "rounded bg-app-primary/10 px-1 py-0.5 text-[9px] text-app-primary"
+                                  : "";
+                                const extractionStatusBadgeClass = set.firstDoc.extraction?.status === "committed"
+                                  ? "rounded bg-app-success/10 px-1 py-0.5 text-[9px] text-app-success"
+                                  : set.firstDoc.extraction?.status === "extracted"
+                                    ? "rounded bg-app-warning-muted px-1 py-0.5 text-[9px] text-app-warning"
+                                    : "rounded bg-app-surface px-1 py-0.5 text-[9px] text-app-muted";
+                                return (
+                                <div key={set.id} className="rounded-md border border-app-border bg-app-surface px-2 py-2">
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-xs font-semibold text-slate-900" title={set.firstDoc.original_filename}>
+                                      <div className="truncate text-xs font-semibold text-app-text" title={set.firstDoc.original_filename}>
                                         {set.isMultiPage 
                                           ? `Document Set (${set.pageCount} pages)`
                                           : (set.firstDoc.original_filename || `Document ${set.firstDoc.id}`)
                                         }
                                       </div>
-                                      <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-700">
+                                      <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-app-muted">
                                         <span>{set.firstDoc.mime_type ? String(set.firstDoc.mime_type).split("/")[1]?.toUpperCase() : "FILE"}</span>
                                         {set.isMultiPage && (
-                                          <span className="rounded bg-slate-200 px-1 py-0.5 text-[9px]">{set.pageCount} pages</span>
+                                          <span className="rounded bg-app-surface px-1 py-0.5 text-[9px] text-app-muted">{set.pageCount} pages</span>
                                         )}
                                         {!set.isMultiPage && set.firstDoc.page_index !== null && (
                                           <span>• Page {Number(set.firstDoc.page_index) + 1}</span>
                                         )}
                                         {set.firstDoc.extraction?.document_type && (
-                                          <span className="rounded bg-blue-100 px-1 py-0.5 text-[9px] text-blue-700">
+                                          <span className={extractionTypeBadgeClass}>
                                             {set.firstDoc.extraction.document_type}
                                           </span>
                                         )}
                                         {set.firstDoc.extraction?.status && (
-                                          <span className={`rounded px-1 py-0.5 text-[9px] ${
-                                            set.firstDoc.extraction.status === "committed" 
-                                              ? "bg-green-100 text-green-700" 
-                                              : set.firstDoc.extraction.status === "extracted"
-                                                ? "bg-yellow-100 text-yellow-700"
-                                                : "bg-gray-100 text-gray-700"
-                                          }`}>
+                                          <span className={extractionStatusBadgeClass}>
                                             {set.firstDoc.extraction.status}
                                           </span>
                                         )}
                                       </div>
                                       {set.firstDoc.extraction?.appointment_data && (
-                                        <div className="mt-1 text-[9px] text-slate-600">
+                                        <div className="mt-1 text-[9px] text-app-muted">
                                           {set.firstDoc.extraction.appointment_data.position_title && (
                                             <div>Position: {set.firstDoc.extraction.appointment_data.position_title}</div>
                                           )}
@@ -481,9 +486,14 @@ export function PersonalInfoDrawer({
                                       <>
                                         <button
                                           type="button"
-                                          className="inline-flex items-center rounded-md bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white hover:bg-slate-800"
+                                          className="app-btn-primary inline-flex items-center rounded-md px-2 py-1 text-[11px] font-semibold"
                                           onClick={() => {
+                                            const isPdfSet = set.docs.every((d: CategorizedDocument) => String(d.mime_type || "").toLowerCase() === "application/pdf");
                                             const urls = set.docs.map((d: CategorizedDocument) => d.signed_url).filter(Boolean) as string[];
+                                            if (isPdfSet && set.docs[0]?.download_url) {
+                                              window.open(String(set.docs[0].download_url), "_blank", "noopener,noreferrer");
+                                              return;
+                                            }
                                             setPreviewModal({
                                               open: true,
                                               title: set.isMultiPage 
@@ -499,8 +509,8 @@ export function PersonalInfoDrawer({
                                         </button>
                                         {!set.isMultiPage && (
                                           <a
-                                            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-900 hover:bg-slate-50"
-                                            href={String(set.firstDoc.signed_url)}
+                                            className="app-btn-secondary inline-flex items-center rounded-md px-2 py-1 text-[11px] font-semibold"
+                                            href={String(set.firstDoc.download_url || set.firstDoc.signed_url)}
                                             target="_blank"
                                             rel="noreferrer"
                                             download={set.firstDoc.original_filename}
@@ -510,12 +520,12 @@ export function PersonalInfoDrawer({
                                         )}
                                         {set.isMultiPage && (
                                           <select
-                                            className="rounded border border-slate-300 bg-white px-1 py-1 text-[10px]"
+                                            className="rounded border border-app-border bg-app-surface px-1 py-1 text-[10px] text-app-text"
                                             onChange={(e) => {
                                               const idx = Number(e.target.value);
-                                              if (!isNaN(idx) && set.docs[idx]?.signed_url) {
+                                              if (!isNaN(idx) && (set.docs[idx]?.download_url || set.docs[idx]?.signed_url)) {
                                                 const link = document.createElement("a");
-                                                link.href = String(set.docs[idx].signed_url);
+                                                link.href = String(set.docs[idx].download_url || set.docs[idx].signed_url);
                                                 link.download = set.docs[idx].original_filename || `page_${idx + 1}`;
                                                 link.target = "_blank";
                                                 link.rel = "noreferrer";
@@ -536,7 +546,7 @@ export function PersonalInfoDrawer({
                                     )}
                                   </div>
                                 </div>
-                              ))}
+                              )})}
                             </div>
                           </div>
                         ));
@@ -563,9 +573,9 @@ export function PersonalInfoDrawer({
 
 function InfoRow({ label, value }: { label: string; value: any }) {
   return (
-    <div className="rounded-lg border bg-white px-3 py-2">
-      <div className="text-[11px] font-semibold text-slate-900">{label}</div>
-      <div className="mt-0.5 text-sm text-slate-900">{value === null || value === undefined ? "" : String(value)}</div>
+    <div className="rounded-lg border border-app-border bg-app-surface px-3 py-2">
+      <div className="text-[11px] font-semibold text-app-text">{label}</div>
+      <div className="mt-0.5 text-sm text-app-text">{value === null || value === undefined ? "" : String(value)}</div>
     </div>
   );
 }

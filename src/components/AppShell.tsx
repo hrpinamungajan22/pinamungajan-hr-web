@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/BrandLogo";
 import { LogoutButton } from "@/components/LogoutButton";
-import { PlusCircle, Eye, Users, Settings, Sun, Moon, Shield } from "lucide-react";
+import { PlusCircle, Eye, Users, Sun, Moon, Shield } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { getAdminPath } from "@/lib/urls";
@@ -117,10 +117,6 @@ export function AppShell({
                   <span>Admin</span>
                 </Link>
               ) : null}
-              <Link className={navClass("/settings")} href="/settings" {...currentProps("/settings")}>
-                <Settings className="h-4 w-4 shrink-0" aria-hidden />
-                <span>Settings</span>
-              </Link>
             </nav>
           </div>
 

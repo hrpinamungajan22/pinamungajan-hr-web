@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 type StaffRow = {
   id: string;
+  username: string | null;
   email: string | null;
   phone: string | null;
   role: string;
@@ -30,6 +31,7 @@ async function readJsonError(res: Response, text: string): Promise<string> {
 
 export function StaffManagementClient() {
   const [rows, setRows] = useState<StaffRow[]>([]);
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -60,19 +62,24 @@ export function StaffManagementClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email: email.trim(), password }),
+        body: JSON.stringify({ username: username.trim(), email: email.trim(), password }),
       });
       const text = await res.text();
       if (!res.ok) throw new Error(await readJsonError(res, text));
       const json = JSON.parse(text) as {
         mode: string;
         email?: string;
+        username?: string;
         generatedPassword: string | null;
       };
+      setUsername("");
       setEmail("");
       setPassword("");
       const lines: string[] = [];
       lines.push(`Staff ${json.mode}.`);
+      if (json.username) {
+        lines.push(`Username: ${json.username}`);
+      }
       if (json.generatedPassword) {
         lines.push(`Password (copy now): ${json.generatedPassword}`);
       }
@@ -130,10 +137,17 @@ export function StaffManagementClient() {
     <section className="app-card p-6 sm:p-8">
       <h2 className="text-base font-semibold text-app-text">HR staff accounts</h2>
       <p className="app-prose-muted mt-1">
-        Create HR accounts, promote existing users, approve pending sign-ups, or remove access.
+        Create HR accounts, assign usernames, approve pending sign-ups, or remove access.
       </p>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-3">
+      <div className="mt-6 grid gap-3 sm:grid-cols-4">
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Username"
+          className="app-input"
+          autoComplete="off"
+        />
         <input
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -158,11 +172,7 @@ export function StaffManagementClient() {
       </div>
 
       <p className="app-prose-muted mt-3 text-xs">
-        Use a real work email so OTP and password reset can be delivered. Google sign-in: enable the Google provider in
-        Supabase Auth; after a user signs in once, enter the same email here with a blank password to assign the HR
-        role. Users who only have a phone on their account show under &quot;Email / phone&quot; as{" "}
-        <span className="font-medium text-app-text">Phone: …</span>. Auto-generated placeholder emails (if you add them
-        later) are for masterlist employee records only, not for HR login accounts.
+        Users now sign in with <span className="font-medium text-app-text">username and password</span>. If you leave the username blank, it defaults to the email name before <span className="font-medium text-app-text">@</span>.
       </p>
 
       {message ? (
@@ -173,6 +183,7 @@ export function StaffManagementClient() {
         <table className="min-w-full text-sm">
           <thead className="app-table-head">
             <tr>
+              <th className="px-3 py-3 text-left">Username</th>
               <th className="px-3 py-3 text-left">Email / phone</th>
               <th className="px-3 py-3 text-left">Role</th>
               <th className="px-3 py-3 text-left">Approved</th>
@@ -184,6 +195,7 @@ export function StaffManagementClient() {
           <tbody className="divide-y divide-app-border">
             {rows.map((r) => (
               <tr key={r.id} className="text-app-text">
+                <td className="px-3 py-2.5">{r.username || "—"}</td>
                 <td className="px-3 py-2.5">
                   {r.email ? (
                     <span>{r.email}</span>
@@ -235,7 +247,7 @@ export function StaffManagementClient() {
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td className="px-3 py-8 text-center text-app-muted" colSpan={6}>
+                <td className="px-3 py-8 text-center text-app-muted" colSpan={7}>
                   No users found.
                 </td>
               </tr>

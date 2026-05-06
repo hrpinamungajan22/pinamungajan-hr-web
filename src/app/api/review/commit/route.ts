@@ -36,6 +36,14 @@ function looksLikeSamePersonLoose(a: any, b: any) {
   return true;
 }
 
+function middleNameCompatible(a: any, b: any) {
+  const left = normalizeNameForMatch(String(a || ""));
+  const right = normalizeNameForMatch(String(b || ""));
+  if (!left || !right) return true;
+  if (left === right) return true;
+  return left[0] === right[0] || left.startsWith(right) || right.startsWith(left);
+}
+
 export async function POST(request: Request) {
   try {
   const supabase = await createSupabaseServerClient();
@@ -172,7 +180,7 @@ export async function POST(request: Request) {
 
     const siblingOr: string[] = [];
     if (setId) siblingOr.push(`document_set_id.eq.${setId}`);
-    if (batchId) siblingOr.push(`batch_id.eq.${batchId}`);
+    else if (batchId) siblingOr.push(`batch_id.eq.${batchId}`);
 
     if (siblingOr.length === 0) {
       const { error: loneExErr } = await supabase
@@ -183,7 +191,7 @@ export async function POST(request: Request) {
       return;
     }
 
-    // Siblings: same document set OR same batch (AND was too strict when one FK is null or IDs differ).
+    // Siblings: same document set when available; otherwise fall back to same batch.
     const { data: relatedDocs, error: sibErr } = await supabase
       .from("employee_documents")
       .select("id")
@@ -220,6 +228,79 @@ export async function POST(request: Request) {
       }
     } catch (e) {
       console.error("[COMMIT] related extractions update:", e);
+    }
+  };
+
+  const backfillOwnerMatchedDocs = async (employeeId: string) => {
+    const { data: employee, error: employeeErr } = await supabase
+      .from("employees")
+      .select("id, last_name, first_name, middle_name, date_of_birth")
+      .eq("id", employeeId)
+      .single();
+
+    if (employeeErr || !employee) {
+      console.error("[COMMIT] employee lookup for backfill failed:", employeeErr);
+      return;
+    }
+
+    const { data: extractionRows, error: extractionErr } = await supabase
+      .from("extractions")
+      .select("id, document_id, linked_employee_id, appointment_data, raw_extracted_json, created_at")
+      .not("document_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (extractionErr) {
+      console.error("[COMMIT] extraction backfill query failed:", extractionErr);
+      return;
+    }
+
+    const matched = (extractionRows || []).filter((row: any) => {
+      if (String(row?.linked_employee_id || "") === employeeId) return true;
+      const raw = row?.raw_extracted_json || {};
+      if (String(raw?.owner_employee_id || "") === employeeId) return true;
+
+      const rawOwner = raw?.owner_candidate || raw?.appointment_data?.owner || {};
+      const appointmentOwner = row?.appointment_data?.owner || {};
+      const owner = {
+        last_name: String(rawOwner?.last_name || appointmentOwner?.last_name || "").trim(),
+        first_name: String(rawOwner?.first_name || appointmentOwner?.first_name || "").trim(),
+        middle_name: String(rawOwner?.middle_name || appointmentOwner?.middle_name || "").trim(),
+        date_of_birth: String(rawOwner?.date_of_birth || appointmentOwner?.date_of_birth || "").trim(),
+      };
+
+      if (!owner.last_name || !owner.first_name) return false;
+      if (normalizeNameForMatch(owner.last_name) !== normalizeNameForMatch(employee.last_name)) return false;
+      if (normalizeNameForMatch(owner.first_name) !== normalizeNameForMatch(employee.first_name)) return false;
+      if (!middleNameCompatible(owner.middle_name, employee.middle_name)) return false;
+
+      const employeeDob = String(employee.date_of_birth || "").trim();
+      if (owner.date_of_birth && employeeDob && owner.date_of_birth !== employeeDob) return false;
+
+      return true;
+    });
+
+    const extractionIds = matched.map((row: any) => String(row.id)).filter(Boolean);
+    const documentIds = matched.map((row: any) => String(row.document_id || "")).filter(Boolean);
+
+    if (extractionIds.length > 0) {
+      const { error: updateExtractionErr } = await supabase
+        .from("extractions")
+        .update({ linked_employee_id: employeeId } as any)
+        .in("id", extractionIds);
+      if (updateExtractionErr) {
+        console.error("[COMMIT] extraction backfill update failed:", updateExtractionErr);
+      }
+    }
+
+    if (documentIds.length > 0) {
+      const { error: updateDocErr } = await supabase
+        .from("employee_documents")
+        .update({ employee_id: employeeId })
+        .in("id", documentIds);
+      if (updateDocErr) {
+        console.error("[COMMIT] employee_documents backfill update failed:", updateDocErr);
+      }
     }
   };
 
@@ -260,7 +341,6 @@ export async function POST(request: Request) {
     console.log("[DEBUG] Patch to apply:", JSON.stringify(patch, null, 2));
 
     if (Object.keys(patch).length > 0) {
-      patch.updated_by = user.id;
       // Appointment data updates the employee record directly
       const { error: updateError, data: updateData } = await supabase.from("employees").update(patch).eq("id", employeeId).select();
       if (updateError) {
@@ -283,6 +363,7 @@ export async function POST(request: Request) {
     const chosenEmployeeId = chosenEmployeeIdRaw;
 
     await linkAllDocs(chosenEmployeeId);
+    await backfillOwnerMatchedDocs(chosenEmployeeId);
     await saveAppointmentFields(chosenEmployeeId);
 
     // Mark committed.
@@ -299,6 +380,9 @@ export async function POST(request: Request) {
 
   // 2) If already linked (doc.employee_id), treat that as the primary key.
   if (primaryEmployeeId) {
+    await linkAllDocs(primaryEmployeeId);
+    await backfillOwnerMatchedDocs(primaryEmployeeId);
+
     // Update appointment fields first
     await saveAppointmentFields(primaryEmployeeId);
     
@@ -330,7 +414,6 @@ export async function POST(request: Request) {
         safePatch.age_group = patch.age_group;
       }
       if (Object.keys(safePatch).length > 0) {
-        safePatch.updated_by = user.id;
         await supabase.from("employees").update(safePatch).eq("id", primaryEmployeeId);
       }
     }
@@ -389,6 +472,7 @@ export async function POST(request: Request) {
     if (exact.length === 1 && !forceCreateNew && confirm !== "no") {
       const targetId = String(exact[0].id);
       await linkAllDocs(targetId);
+      await backfillOwnerMatchedDocs(targetId);
       await saveAppointmentFields(targetId);
 
       await supabase.from("extractions").update(patchCommittedExtraction(targetId)).eq("id", extractionId);
@@ -440,8 +524,6 @@ export async function POST(request: Request) {
         gender: ownerCandidate.gender || null,
         age: computedAge.age,
         age_group: computedAge.age_group,
-        created_by: user.id,
-        updated_by: user.id,
       })
       .select("id")
       .single();
@@ -453,6 +535,7 @@ export async function POST(request: Request) {
 
     const newId = String(inserted.id);
     await linkAllDocs(newId);
+    await backfillOwnerMatchedDocs(newId);
     await saveAppointmentFields(newId);
 
     await supabase.from("extractions").update(patchCommittedExtraction(newId)).eq("id", extractionId);
@@ -486,6 +569,7 @@ export async function POST(request: Request) {
     const targetId = String(possible[0].id);
 
     await linkAllDocs(targetId);
+    await backfillOwnerMatchedDocs(targetId);
     await saveAppointmentFields(targetId);
 
     await supabase.from("extractions").update(patchCommittedExtraction(targetId)).eq("id", extractionId);
@@ -507,47 +591,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // No matches (PDS / other): create the employee row so Masterlist is populated.
-  {
-    const dobForAge = ownerCandidate.date_of_birth || null;
-    const computedAge = dobForAge ? computeAgeAndGroupFromDobIso(dobForAge) : { age: null as number | null, age_group: null as string | null };
-
-    const { data: inserted, error: insertErr } = await supabase
-      .from("employees")
-      .insert({
-        last_name: ownerCandidate.last_name,
-        first_name: ownerCandidate.first_name,
-        middle_name: ownerCandidate.middle_name || null,
-        name_extension: ownerCandidate.name_extension || null,
-        date_of_birth: dobForAge,
-        gender: ownerCandidate.gender || null,
-        age: computedAge.age,
-        age_group: computedAge.age_group,
-        created_by: user.id,
-        updated_by: user.id,
-      })
-      .select("id")
-      .single();
-
-    if (insertErr || !inserted?.id) {
-      console.error("[COMMIT] insert employee failed:", insertErr);
-      return new NextResponse(insertErr?.message || "Failed to create employee record", { status: 400 });
-    }
-
-    const newId = String(inserted.id);
-    await linkAllDocs(newId);
-    await saveAppointmentFields(newId);
-
-    await supabase.from("extractions").update(patchCommittedExtraction(newId)).eq("id", extractionId);
-
-    try {
-      revalidatePath("/masterlist");
-    } catch {
-      // ignore
-    }
-
-    return NextResponse.json({ ok: true, employee_id: newId, action: "created" });
-  }
+  return NextResponse.json({
+    needs_confirmation: true,
+    reason: "not_registered",
+    candidates: [],
+  });
   } catch (e) {
     console.error("[COMMIT] failed:", e);
     const msg = e instanceof Error ? e.message : String(e);

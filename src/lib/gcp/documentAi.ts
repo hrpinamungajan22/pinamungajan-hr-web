@@ -1,6 +1,18 @@
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
 import { assertServiceAccountJsonFileExists, normalizeEnvPath } from "@/lib/gcp/credentialsEnv";
 
+type DocumentAiConfig = {
+  projectId: string;
+  location: string;
+  processorId: string;
+  credentials: any;
+  adcPath: string;
+};
+
+let cachedDocAiConfig: DocumentAiConfig | null = null;
+let cachedDocAiClient: DocumentProcessorServiceClient | null = null;
+let cachedProcessorName: string | null = null;
+
 function readEnv(...keys: string[]) {
   for (const k of keys) {
     const v = process.env[k];
@@ -46,7 +58,9 @@ function parseServiceAccountJson(raw: string) {
   }
 }
 
-export function getDocumentAiConfig() {
+export function getDocumentAiConfig(): DocumentAiConfig {
+  if (cachedDocAiConfig) return cachedDocAiConfig;
+
   const credentialsJsonRaw = readEnv("GCP_SERVICE_ACCOUNT_JSON", "GOOGLE_CLOUD_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS_JSON");
   
   // DEBUG: Log what we received (hide sensitive parts)
@@ -94,14 +108,18 @@ export function getDocumentAiConfig() {
     throw new Error(`Missing ${missing.join(", ")}`);
   }
 
-  return { projectId, location, processorId, credentials, adcPath };
+  cachedDocAiConfig = { projectId, location, processorId, credentials, adcPath };
+  return cachedDocAiConfig;
 }
 
 export function createDocumentAiClient() {
+  if (cachedDocAiClient) return cachedDocAiClient;
+
   const cfg = getDocumentAiConfig();
   if (cfg.credentials) {
     console.log("[DEBUG DOC-AI] Creating client with credentials");
-    return new DocumentProcessorServiceClient({ projectId: cfg.projectId, credentials: cfg.credentials });
+    cachedDocAiClient = new DocumentProcessorServiceClient({ projectId: cfg.projectId, credentials: cfg.credentials });
+    return cachedDocAiClient;
   }
   // Use ADC (GOOGLE_APPLICATION_CREDENTIALS) if provided.
   if (cfg.adcPath && !String(process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim()) {
@@ -110,12 +128,16 @@ export function createDocumentAiClient() {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = normalizeEnvPath(cfg.adcPath);
   }
   console.log("[DEBUG DOC-AI] Creating client with ADC");
-  return new DocumentProcessorServiceClient({ projectId: cfg.projectId });
+  cachedDocAiClient = new DocumentProcessorServiceClient({ projectId: cfg.projectId });
+  return cachedDocAiClient;
 }
 
 export function getProcessorName() {
+  if (cachedProcessorName) return cachedProcessorName;
+
   const { projectId, location, processorId } = getDocumentAiConfig();
   const fullName = `projects/${projectId}/locations/${location}/processors/${processorId}`;
   console.log("[DEBUG DOC-AI] Full processor name:", fullName);
-  return fullName;
+  cachedProcessorName = fullName;
+  return cachedProcessorName;
 }
