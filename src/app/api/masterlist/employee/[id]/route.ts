@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { formatDateDdMmYyyy } from "@/lib/pds/validators";
 import { computeAgeAndGroupFromDobIso } from "@/lib/age";
 
@@ -68,6 +69,18 @@ function extractionMatchesEmployee(extraction: any, employee: any) {
   return true;
 }
 
+function buildDocumentRowKey(doc: any) {
+  const bucket = String(doc?.storage_bucket || "").trim();
+  const path = String(doc?.storage_path || "").trim();
+  const setId = String(doc?.document_set_id || "").trim();
+  const batchId = String(doc?.batch_id || "").trim();
+  const pageIndex = doc?.page_index === null || doc?.page_index === undefined ? "" : String(doc.page_index);
+  if (bucket && path) return `${bucket}|${path}|${pageIndex}`;
+  if (setId) return `set|${setId}|${pageIndex}`;
+  if (batchId) return `batch|${batchId}|${pageIndex}`;
+  return `id|${String(doc?.id || "")}`;
+}
+
 function buildDownloadHref(input: { bucket: string; path: string; filename: string; contentType: string }) {
   const qs = new URLSearchParams({
     bucket: input.bucket,
@@ -79,16 +92,18 @@ function buildDownloadHref(input: { bucket: string; path: string; filename: stri
 }
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const supabase = await createSupabaseServerClient();
+  const authSupabase = await createSupabaseServerClient();
 
   const {
     data: { user },
     error: userError,
-  } = await supabase.auth.getUser();
+  } = await authSupabase.auth.getUser();
 
   if (userError || !user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
+
+  const supabase = createSupabaseAdminClient();
 
   const { id } = await params;
   const employeeId = String(id || "");
@@ -108,55 +123,127 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const { data: directDocs } = await supabase
     .from("employee_documents")
-    .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, created_at, document_set_id, document_category, document_type, doc_type, detection_confidence, detection_evidence")
+    .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, created_at, document_set_id, batch_id, document_category, document_type, doc_type, detection_confidence, detection_evidence")
     .eq("employee_id", employeeId)
     .order("created_at", { ascending: false })
     .limit(100);
 
   const { data: linkedExtractions } = await supabase
     .from("extractions")
-    .select("id, document_id, status, document_type, appointment_data, created_at, linked_employee_id, raw_extracted_json")
+    .select("id, document_id, status, document_type, appointment_data, created_at, linked_employee_id, raw_extracted_json, document_set_id, batch_id")
     .eq("linked_employee_id", employeeId)
     .order("created_at", { ascending: false })
     .limit(100);
 
   const { data: recoveryExtractions } = await supabase
     .from("extractions")
-    .select("id, document_id, status, document_type, appointment_data, created_at, linked_employee_id, raw_extracted_json")
+    .select("id, document_id, status, document_type, appointment_data, created_at, linked_employee_id, raw_extracted_json, document_set_id, batch_id")
     .not("document_id", "is", null)
     .order("created_at", { ascending: false })
     .limit(500);
 
-  const matchedExtractions = [
+  const matchedExtractionMap = new Map<string, any>();
+  for (const extraction of [
     ...(linkedExtractions || []),
-    ...((recoveryExtractions || []).filter((extraction: any) => extractionMatchesEmployee(extraction, employee))),
-  ];
+    ...((recoveryExtractions || []).filter((row: any) => extractionMatchesEmployee(row, employee))),
+  ]) {
+    const extractionId = String(extraction?.id || "");
+    if (!extractionId || matchedExtractionMap.has(extractionId)) continue;
+    matchedExtractionMap.set(extractionId, extraction);
+  }
+  const matchedExtractions = Array.from(matchedExtractionMap.values());
 
   const extractionByDocId = new Map<string, any>();
+  const extractionBySetId = new Map<string, any>();
+  const extractionByBatchId = new Map<string, any>();
   for (const extraction of matchedExtractions) {
     const docId = extraction?.document_id ? String(extraction.document_id) : "";
-    if (!docId || extractionByDocId.has(docId)) continue;
-    extractionByDocId.set(docId, extraction);
+    if (docId && !extractionByDocId.has(docId)) extractionByDocId.set(docId, extraction);
+    const setId = extraction?.document_set_id ? String(extraction.document_set_id) : "";
+    if (setId && !extractionBySetId.has(setId)) extractionBySetId.set(setId, extraction);
+    const batchId = extraction?.batch_id ? String(extraction.batch_id) : "";
+    if (batchId && !extractionByBatchId.has(batchId)) extractionByBatchId.set(batchId, extraction);
   }
 
   const directDocIds = new Set((directDocs || []).map((doc: any) => String(doc.id)));
   const missingDocIds = Array.from(extractionByDocId.keys()).filter((id) => !directDocIds.has(id));
+  const relatedSetIds = Array.from(new Set(matchedExtractions.map((row: any) => String(row?.document_set_id || "")).filter(Boolean)));
+  const relatedBatchIds = Array.from(new Set(matchedExtractions.map((row: any) => String(row?.batch_id || "")).filter(Boolean)));
+  const directSetIds = new Set((directDocs || []).map((doc: any) => String(doc?.document_set_id || "")).filter(Boolean));
+  const directBatchIds = new Set((directDocs || []).map((doc: any) => String(doc?.batch_id || "")).filter(Boolean));
+  const missingSetIds = relatedSetIds.filter((setId) => !directSetIds.has(setId));
+  const missingBatchIds = relatedBatchIds.filter((batchId) => !directBatchIds.has(batchId));
 
   let fallbackDocs: any[] = [];
   if (missingDocIds.length > 0) {
     const { data } = await supabase
       .from("employee_documents")
-      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, created_at, document_set_id, document_category, document_type, doc_type, detection_confidence, detection_evidence")
+      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, created_at, document_set_id, batch_id, document_category, document_type, doc_type, detection_confidence, detection_evidence")
       .in("id", missingDocIds)
       .order("created_at", { ascending: false });
     fallbackDocs = data || [];
   }
 
+  let setDocs: any[] = [];
+  if (missingSetIds.length > 0) {
+    const { data } = await supabase
+      .from("employee_documents")
+      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, created_at, document_set_id, batch_id, document_category, document_type, doc_type, detection_confidence, detection_evidence")
+      .in("document_set_id", missingSetIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    setDocs = data || [];
+  }
+
+  let batchDocs: any[] = [];
+  if (missingBatchIds.length > 0) {
+    const { data } = await supabase
+      .from("employee_documents")
+      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, created_at, document_set_id, batch_id, document_category, document_type, doc_type, detection_confidence, detection_evidence")
+      .in("batch_id", missingBatchIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    batchDocs = data || [];
+  }
+
+  const enrichmentDocIds = Array.from(
+    new Set(
+      [...(directDocs || []), ...fallbackDocs, ...setDocs, ...batchDocs]
+        .map((doc: any) => String(doc?.id || ""))
+        .filter(Boolean)
+    )
+  );
+
+  if (enrichmentDocIds.length > 0) {
+    const { data: extractionsForDocs } = await supabase
+      .from("extractions")
+      .select("id, document_id, status, document_type, appointment_data, created_at, linked_employee_id, raw_extracted_json, document_set_id, batch_id")
+      .in("document_id", enrichmentDocIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    for (const extraction of extractionsForDocs || []) {
+      const docId = extraction?.document_id ? String(extraction.document_id) : "";
+      if (docId && !extractionByDocId.has(docId)) extractionByDocId.set(docId, extraction);
+      const setId = extraction?.document_set_id ? String(extraction.document_set_id) : "";
+      if (setId && !extractionBySetId.has(setId)) extractionBySetId.set(setId, extraction);
+      const batchId = extraction?.batch_id ? String(extraction.batch_id) : "";
+      if (batchId && !extractionByBatchId.has(batchId)) extractionByBatchId.set(batchId, extraction);
+    }
+  }
+
   const mergedDocMap = new Map<string, any>();
-  for (const doc of [...(directDocs || []), ...fallbackDocs]) {
-    const id = String(doc?.id || "");
-    if (!id || mergedDocMap.has(id)) continue;
-    mergedDocMap.set(id, doc);
+  for (const doc of [...(directDocs || []), ...fallbackDocs, ...setDocs, ...batchDocs]) {
+    const key = buildDocumentRowKey(doc);
+    if (!key) continue;
+    const existing = mergedDocMap.get(key);
+    if (!existing) {
+      mergedDocMap.set(key, doc);
+      continue;
+    }
+    if (!existing.employee_id && doc?.employee_id) {
+      mergedDocMap.set(key, doc);
+    }
   }
 
   const rawDocuments = Array.from(mergedDocMap.values()).sort(
@@ -172,13 +259,18 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         const { data: signed } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10);
         signed_url = signed?.signedUrl ?? null;
       }
-      const extraction = extractionByDocId.get(String(d.id)) || null;
+      const extraction =
+        extractionByDocId.get(String(d.id)) ||
+        (d.document_set_id ? extractionBySetId.get(String(d.document_set_id)) : null) ||
+        (d.batch_id ? extractionByBatchId.get(String(d.batch_id)) : null) ||
+        null;
       return {
         id: d.id,
         original_filename: d.original_filename,
         mime_type: d.mime_type,
         page_index: d.page_index,
         document_set_id: d.document_set_id,
+        batch_id: d.batch_id,
         document_category: d.document_category || inferDocumentCategory(d),
         document_type: d.document_type,
         doc_type: d.doc_type,

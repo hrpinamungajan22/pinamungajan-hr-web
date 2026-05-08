@@ -141,7 +141,7 @@ export function PersonalInfoDrawer({
       setState({ status: "loading", employeeId: employeeIdStr });
       try {
         const url = `${window.location.origin}/api/masterlist/employee/${employeeIdStr}`;
-        const res = await fetch(url, { credentials: "include" });
+        const res = await fetch(url, { credentials: "include", cache: "no-store" });
         const text = await res.text();
         if (!res.ok) throw new Error(text || res.statusText);
         const payload = JSON.parse(text);
@@ -208,7 +208,7 @@ export function PersonalInfoDrawer({
 
       // Reload drawer data.
       const url = `${window.location.origin}/api/masterlist/employee/${employeeIdStr}`;
-      const reload = await fetch(url, { credentials: "include" });
+      const reload = await fetch(url, { credentials: "include", cache: "no-store" });
       const text = await reload.text();
       if (reload.ok) {
         setState({ status: "ready", employeeId: employeeIdStr, payload: JSON.parse(text) });

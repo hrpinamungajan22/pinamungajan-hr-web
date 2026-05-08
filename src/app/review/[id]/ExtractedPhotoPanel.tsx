@@ -31,6 +31,12 @@ function clampBox(b: NormBox): NormBox {
   };
 }
 
+function normalizeRotationDegrees(value: number) {
+  const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
+  if (normalized === 90 || normalized === 180 || normalized === 270) return normalized;
+  return 0;
+}
+
 export function ExtractedPhotoPanel({
   extractionId,
   initialEmployeeId,
@@ -64,6 +70,7 @@ export function ExtractedPhotoPanel({
   const [editOpen, setEditOpen] = useState(false);
   const [cropMode, setCropMode] = useState<"free" | "passport">("passport");
   const [zoom, setZoom] = useState(1);
+  const [rotationDegrees, setRotationDegrees] = useState<number>(() => normalizeRotationDegrees(Number(debugPhoto?.rotationDegrees || 0)));
 
   // Passport photo ratio: 35mm x 45mm = 7:9 aspect ratio
   const PASSPORT_ASPECT = 35 / 45; // width/height
@@ -159,6 +166,7 @@ export function ExtractedPhotoPanel({
         const url = new URL(`${window.location.origin}/api/pds/page-preview`);
         url.searchParams.set("extraction_id", extractionId);
         url.searchParams.set("page_index", String(selectedPageIndex));
+        url.searchParams.set("rotation_degrees", String(rotationDegrees));
         const res = await fetch(url.toString(), { method: "GET", credentials: "include" });
         if (!res.ok) {
           const msg = await res.text().catch(() => "");
@@ -185,7 +193,7 @@ export function ExtractedPhotoPanel({
     return () => {
       cancelled = true;
     };
-  }, [editOpen, extractionId, selectedPageIndex]);
+  }, [editOpen, extractionId, selectedPageIndex, rotationDegrees]);
 
   useEffect(() => {
     return () => {
@@ -201,6 +209,9 @@ export function ExtractedPhotoPanel({
   const canSave = Boolean(storedPath) && faceDetected && Boolean(employeeId);
   const canDebug = Boolean(debugPhoto);
   const canManualSave = Boolean(employeeId) && selectedPageIndex !== null && Number.isFinite(selectedPageIndex);
+  const pagePreviewAspect = rotationDegrees === 90 || rotationDegrees === 270 ? 8.5 / 13 : 13 / 8.5;
+  const previewImageUrl = editOpen && livePreviewUrl ? livePreviewUrl : state.signedUrl;
+  const canPrimarySave = editOpen ? canManualSave : canSave;
 
   // Live preview: draw cropped region to canvas whenever ROI changes
   const updateLivePreview = useCallback(() => {
@@ -324,6 +335,7 @@ export function ExtractedPhotoPanel({
           employee_id: employeeId,
           page_index: selectedPageIndex,
           roi: clampBox(roi),
+          rotation_degrees: rotationDegrees,
           force: true,
         }),
       });
@@ -412,11 +424,30 @@ export function ExtractedPhotoPanel({
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ extraction_id: extractionId, employee_id: employeeId, force: false }),
+        body: JSON.stringify({ extraction_id: extractionId, employee_id: employeeId, force: true }),
       });
       const text = await res.text();
       if (!res.ok) throw new Error(text || res.statusText);
-      setState((s) => ({ status: "saved", signedUrl: s.signedUrl }));
+
+      const result = JSON.parse(text) as { ok: boolean; bucket?: string; path?: string };
+      if (result.ok && result.bucket && result.path) {
+        const signedRes = await fetch(`${window.location.origin}/api/files/signed-url`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ bucket: result.bucket, path: result.path, expiresIn: 60 * 10 }),
+        });
+        const signedText = await signedRes.text();
+        if (signedRes.ok) {
+          const json = JSON.parse(signedText) as any;
+          const newSignedUrl = json?.signedUrl ? String(json.signedUrl) : null;
+          setState({ status: "saved", signedUrl: newSignedUrl });
+        } else {
+          setState((s) => ({ status: "saved", signedUrl: s.signedUrl }));
+        }
+      } else {
+        setState((s) => ({ status: "saved", signedUrl: s.signedUrl }));
+      }
     } catch (e) {
       setState((s) => ({ status: "error", message: e instanceof Error ? e.message : String(e), signedUrl: s.signedUrl }));
     }
@@ -444,13 +475,19 @@ export function ExtractedPhotoPanel({
           </button>
           <button
             type="button"
-            disabled={!canSave || state.status === "saving"}
+            disabled={!canPrimarySave || state.status === "saving"}
             className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-              canSave && state.status !== "saving" ? "bg-app-success text-app-on-primary hover:opacity-90" : "bg-app-surface-muted text-app-muted"
+              canPrimarySave && state.status !== "saving" ? "bg-app-success text-app-on-primary hover:opacity-90" : "bg-app-surface-muted text-app-muted"
             }`}
-            onClick={save}
+            onClick={() => {
+              if (editOpen) {
+                saveAdjusted();
+                return;
+              }
+              save();
+            }}
           >
-            Save photo to employee
+            {editOpen ? "Save adjusted photo" : "Save/Replace photo"}
           </button>
           <button
             type="button"
@@ -469,9 +506,9 @@ export function ExtractedPhotoPanel({
 
       <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
         <div>
-          {state.signedUrl ? (
+          {previewImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={state.signedUrl} alt="Extracted ID photo" className="h-40 w-40 rounded-lg border object-cover" />
+            <img src={previewImageUrl} alt="Extracted ID photo" className="h-40 w-40 rounded-lg border object-cover" />
           ) : (
             <div className="flex h-40 w-40 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-xs text-app-muted">
               {canPreview ? "Loading…" : "No extracted photo"}
@@ -566,6 +603,23 @@ export function ExtractedPhotoPanel({
                     Free resize
                   </button>
                 </div>
+                <div className="flex items-center gap-1 rounded-md border border-app-border bg-app-surface p-1">
+                  <button
+                    type="button"
+                    onClick={() => setRotationDegrees((value) => normalizeRotationDegrees(value - 90))}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-app-text hover:bg-app-surface-muted"
+                  >
+                    Rotate left
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRotationDegrees((value) => normalizeRotationDegrees(value + 90))}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-app-text hover:bg-app-surface-muted"
+                  >
+                    Rotate right
+                  </button>
+                  <span className="px-1 text-[11px] text-app-muted">{rotationDegrees}°</span>
+                </div>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
@@ -598,7 +652,7 @@ export function ExtractedPhotoPanel({
                   <div
                     ref={previewWrapRef}
                     className="relative overflow-hidden rounded-lg border border-app-border bg-app-surface"
-                    style={{ maxWidth: 360, height: Math.round(360 * (13/8.5) * zoom), overflow: "auto" }}
+                    style={{ maxWidth: 360, height: Math.round(360 * pagePreviewAspect * zoom), overflow: "auto" }}
                     onPointerMove={onDragMove}
                     onPointerUp={endDrag}
                     onPointerCancel={endDrag}
@@ -615,11 +669,11 @@ export function ExtractedPhotoPanel({
                         onLoad={updateLivePreview}
                       />
                     ) : previewError ? (
-                      <div className="flex aspect-[8.5/13] w-full items-center justify-center p-4 text-center text-xs text-app-danger">
+                      <div className="flex h-full w-full items-center justify-center p-4 text-center text-xs text-app-danger">
                         {previewError}
                       </div>
                     ) : (
-                      <div className="flex aspect-[8.5/13] w-full items-center justify-center text-xs text-app-muted">Loading preview…</div>
+                      <div className="flex h-full w-full items-center justify-center text-xs text-app-muted">Loading preview…</div>
                     )}
 
                     <div

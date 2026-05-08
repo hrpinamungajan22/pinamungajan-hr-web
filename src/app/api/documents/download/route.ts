@@ -68,6 +68,18 @@ function extractionMatchesEmployee(extraction: any, employee: any) {
   return true;
 }
 
+function buildDocumentRowKey(doc: any) {
+  const bucket = String(doc?.storage_bucket || "").trim();
+  const path = String(doc?.storage_path || "").trim();
+  const setId = String(doc?.document_set_id || "").trim();
+  const batchId = String(doc?.batch_id || "").trim();
+  const pageIndex = doc?.page_index === null || doc?.page_index === undefined ? "" : String(doc.page_index);
+  if (bucket && path) return `${bucket}|${path}|${pageIndex}`;
+  if (setId) return `set|${setId}|${pageIndex}`;
+  if (batchId) return `batch|${batchId}|${pageIndex}`;
+  return `id|${String(doc?.id || "")}`;
+}
+
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
@@ -103,7 +115,7 @@ export async function GET(request: Request) {
 
   const { data: directDocs, error: docsErr } = await supabase
     .from("employee_documents")
-    .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, doc_type, document_type, document_category, document_set_id, created_at")
+    .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, doc_type, document_type, document_category, document_set_id, batch_id, created_at")
     .eq("employee_id", employeeId)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -114,7 +126,7 @@ export async function GET(request: Request) {
 
   const { data: linkedExtractions, error: linkedErr } = await supabase
     .from("extractions")
-    .select("id, document_id, linked_employee_id, appointment_data, raw_extracted_json")
+    .select("id, document_id, linked_employee_id, appointment_data, raw_extracted_json, document_set_id, batch_id")
     .eq("linked_employee_id", employeeId)
     .limit(100);
 
@@ -124,7 +136,7 @@ export async function GET(request: Request) {
 
   const { data: recoveryExtractions, error: recoveryErr } = await supabase
     .from("extractions")
-    .select("id, document_id, linked_employee_id, appointment_data, raw_extracted_json, created_at")
+    .select("id, document_id, linked_employee_id, appointment_data, raw_extracted_json, created_at, document_set_id, batch_id")
     .not("document_id", "is", null)
     .order("created_at", { ascending: false })
     .limit(500);
@@ -133,21 +145,29 @@ export async function GET(request: Request) {
     return new NextResponse(recoveryErr.message, { status: 400 });
   }
 
-  const matchedExtractions = [
+  const matchedExtractionMap = new Map<string, any>();
+  for (const extraction of [
     ...(linkedExtractions || []),
     ...((recoveryExtractions || []).filter((extraction: any) => extractionMatchesEmployee(extraction, employee))),
-  ];
+  ]) {
+    const extractionId = String(extraction?.id || "");
+    if (!extractionId || matchedExtractionMap.has(extractionId)) continue;
+    matchedExtractionMap.set(extractionId, extraction);
+  }
+  const matchedExtractions = Array.from(matchedExtractionMap.values());
 
   const directIds = new Set((directDocs || []).map((d: any) => String(d.id)));
   const missingDocIds = Array.from(
     new Set(matchedExtractions.map((e: any) => String(e?.document_id || "")).filter(Boolean))
   ).filter((id) => !directIds.has(id));
+  const relatedSetIds = Array.from(new Set(matchedExtractions.map((row: any) => String(row?.document_set_id || "")).filter(Boolean)));
+  const relatedBatchIds = Array.from(new Set(matchedExtractions.map((row: any) => String(row?.batch_id || "")).filter(Boolean)));
 
   let fallbackDocs: any[] = [];
   if (missingDocIds.length > 0) {
     const { data, error } = await supabase
       .from("employee_documents")
-      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, doc_type, document_type, document_category, document_set_id, created_at")
+      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, doc_type, document_type, document_category, document_set_id, batch_id, created_at")
       .in("id", missingDocIds)
       .order("created_at", { ascending: false });
     if (error) {
@@ -156,10 +176,48 @@ export async function GET(request: Request) {
     fallbackDocs = data || [];
   }
 
-  const mergedRows = [...(directDocs || []), ...fallbackDocs].filter((row, index, arr) => {
-    const id = String(row?.id || "");
-    return id && arr.findIndex((x: any) => String(x?.id || "") === id) === index;
-  });
+  let setDocs: any[] = [];
+  if (relatedSetIds.length > 0) {
+    const { data, error } = await supabase
+      .from("employee_documents")
+      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, doc_type, document_type, document_category, document_set_id, batch_id, created_at")
+      .in("document_set_id", relatedSetIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      return new NextResponse(error.message, { status: 400 });
+    }
+    setDocs = data || [];
+  }
+
+  let batchDocs: any[] = [];
+  if (relatedBatchIds.length > 0) {
+    const { data, error } = await supabase
+      .from("employee_documents")
+      .select("id, employee_id, storage_bucket, storage_path, mime_type, original_filename, page_index, doc_type, document_type, document_category, document_set_id, batch_id, created_at")
+      .in("batch_id", relatedBatchIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      return new NextResponse(error.message, { status: 400 });
+    }
+    batchDocs = data || [];
+  }
+
+  const mergedRowMap = new Map<string, any>();
+  for (const row of [...(directDocs || []), ...fallbackDocs, ...setDocs, ...batchDocs]) {
+    const key = buildDocumentRowKey(row);
+    if (!key) continue;
+    const existing = mergedRowMap.get(key);
+    if (!existing) {
+      mergedRowMap.set(key, row);
+      continue;
+    }
+    if (!existing.employee_id && row?.employee_id) {
+      mergedRowMap.set(key, row);
+    }
+  }
+  const mergedRows = Array.from(mergedRowMap.values());
 
   const rows = mergedRows.filter((row: any) => {
     if (!docType || docType === "all") return true;

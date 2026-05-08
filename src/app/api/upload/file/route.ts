@@ -73,6 +73,8 @@ export async function POST(request: Request) {
   const attachToDocumentSetId = documentSetIdRaw ? documentSetIdRaw : null;
   const extractionIdRaw = String(form.get("extraction_id") || "").trim();
   const attachToExtractionId = extractionIdRaw ? extractionIdRaw : null;
+  const ownerEmployeeIdRaw = String(form.get("owner_employee_id") || "").trim();
+  const ownerEmployeeId = ownerEmployeeIdRaw ? ownerEmployeeIdRaw : null;
   
   // Document type user selection
   const docTypeUserSelected = String(form.get("doc_type_user_selected") || "").trim() || null;
@@ -125,7 +127,7 @@ export async function POST(request: Request) {
       mime_type: mimeType,
       original_filename: originalFilename,
       file_size_bytes: Number.isFinite(fileSizeBytes) ? fileSizeBytes : null,
-      employee_id: null,
+      employee_id: ownerEmployeeId,
       batch_id: batchId,
       document_set_id: documentSetId,
       page_index: Number.isFinite(pageIndex as any) ? pageIndex : null,
@@ -165,11 +167,19 @@ export async function POST(request: Request) {
       return new NextResponse("batch_id mismatch when attaching page to extraction", { status: 400 });
     }
     if (!existingBatch && batchId) {
+      const extractionPatch: any = { batch_id: batchId };
+      if (ownerEmployeeId) extractionPatch.linked_employee_id = ownerEmployeeId;
       const { error: upErr } = await supabase
         .from("extractions")
-        .update({ batch_id: batchId } as any)
+        .update(extractionPatch)
         .eq("id", attachToExtractionId);
       if (upErr) return new NextResponse(upErr.message || "Failed to set extraction.batch_id", { status: 400 });
+    } else if (ownerEmployeeId) {
+      const { error: ownerLinkErr } = await supabase
+        .from("extractions")
+        .update({ linked_employee_id: ownerEmployeeId } as any)
+        .eq("id", attachToExtractionId);
+      if (ownerLinkErr) return new NextResponse(ownerLinkErr.message || "Failed to set extraction.linked_employee_id", { status: 400 });
     }
 
     const existingSetId = existing.document_set_id ? String(existing.document_set_id) : null;
@@ -193,6 +203,7 @@ export async function POST(request: Request) {
         document_set_id: documentSetId,
         page_index: Number.isFinite(pageIndex as any) ? pageIndex : null,
         status: "uploaded",
+        linked_employee_id: ownerEmployeeId,
         created_by: user.id,
         updated_by: user.id,
         doc_type_user_selected: docTypeUserSelected,

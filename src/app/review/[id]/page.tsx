@@ -4,12 +4,15 @@ import { RunOcrButton } from "@/app/review/[id]/RunOcrButton";
 import { GeneratePdsPdfButton } from "@/app/review/[id]/GeneratePdsPdfButton";
 import { formatIsoToDdMmYyyy } from "@/lib/pds/validators";
 import { CommitEmployeePanel } from "@/app/review/[id]/CommitEmployeePanel";
+import { AppointmentDetailsPanel } from "@/app/review/[id]/AppointmentDetailsPanel";
+import { PdsPersonalInfoPanel } from "@/app/review/[id]/PdsPersonalInfoPanel";
 import { cookies } from "next/headers";
 import { SexConfirm } from "@/app/review/[id]/SexConfirm";
 import { ExtractedPhotoPanel } from "@/app/review/[id]/ExtractedPhotoPanel";
 import { DebugExtractionPanel } from "@/app/review/[id]/DebugExtractionPanel";
 import { DocTypePanel } from "@/app/review/[id]/DocTypePanel";
 import { canAccessReviewQueue } from "@/lib/auth/roles";
+import { extractAppointmentFields } from "@/lib/appointment/fieldExtract";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +67,17 @@ function pdsPersonalFieldsForDisplay(ex: any) {
   };
 }
 
+function firstReviewValue<T>(...values: T[]) {
+  for (const value of values) {
+    if (typeof value === "string") {
+      if (value.trim()) return value;
+      continue;
+    }
+    if (value !== null && value !== undefined) return value;
+  }
+  return null;
+}
+
 export default async function ReviewDetailPage({
   params,
 }: {
@@ -93,7 +107,7 @@ export default async function ReviewDetailPage({
   const { data: extraction, error } = await supabase
     .from("extractions")
     .select(
-      "id, status, raw_extracted_json, normalized_json, validated_json, warnings, errors, evidence, confidence, document_id, document_set_id, batch_id, doc_type_user_selected, doc_type_final, doc_type_detected, doc_type_mismatch_warning, appointment_data, extraction_debug"
+      "id, status, raw_extracted_json, normalized_json, validated_json, warnings, errors, evidence, confidence, document_id, document_set_id, batch_id, linked_employee_id, doc_type_user_selected, doc_type_final, doc_type_detected, doc_type_mismatch_warning, appointment_data, extraction_debug"
     )
     .eq("id", id)
     .single();
@@ -107,9 +121,20 @@ export default async function ReviewDetailPage({
   let originalInfo: { filename: string; mime: string } | null = null;
   let searchableSignedUrl: string | null = null;
   let linkedEmployeeIdFromDoc: string | null = null;
+  let linkedEmployeeRecord: {
+    id: string;
+    last_name: string | null;
+    first_name: string | null;
+    middle_name: string | null;
+    date_of_birth: string | null;
+  } | null = null;
   let originalDownloadHref: string | null = null;
   let searchableDownloadHref: string | null = null;
   let photoSourcePages: Array<{ pageIndex: number; label: string }> = [];
+
+  if (!error && (extraction as any)?.linked_employee_id) {
+    linkedEmployeeIdFromDoc = String((extraction as any).linked_employee_id);
+  }
 
   if (!error && extraction?.document_id) {
     const { data: doc } = await supabase
@@ -120,7 +145,7 @@ export default async function ReviewDetailPage({
 
     if (doc?.storage_bucket && doc?.storage_path) {
       originalInfo = { filename: doc.original_filename, mime: doc.mime_type };
-      linkedEmployeeIdFromDoc = (doc as any).employee_id ? String((doc as any).employee_id) : null;
+      linkedEmployeeIdFromDoc = (doc as any).employee_id ? String((doc as any).employee_id) : linkedEmployeeIdFromDoc;
       const { data: signed } = await supabase.storage
         .from(doc.storage_bucket)
         .createSignedUrl(doc.storage_path, 60 * 10);
@@ -191,7 +216,85 @@ export default async function ReviewDetailPage({
     }
   }
 
+  if (!error && linkedEmployeeIdFromDoc) {
+    const { data: employee } = await supabase
+      .from("employees")
+      .select("id, last_name, first_name, middle_name, date_of_birth")
+      .eq("id", linkedEmployeeIdFromDoc)
+      .single();
+
+    if (employee?.id) {
+      linkedEmployeeRecord = {
+        id: String(employee.id),
+        last_name: employee.last_name ?? null,
+        first_name: employee.first_name ?? null,
+        middle_name: employee.middle_name ?? null,
+        date_of_birth: employee.date_of_birth ?? null,
+      };
+    }
+  }
+
   const pdsPersonal = extraction && !error ? pdsPersonalFieldsForDisplay(extraction) : null;
+  const appointmentDataForDisplay = extraction && !error
+    ? (() => {
+        const appointmentData = ((extraction as any)?.appointment_data ?? null) as any;
+        const rawText = String((extraction as any)?.raw_extracted_json?.text || "").trim();
+        const evidenceDates = (rawText.match(/\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}\b/g) || []).slice(0, 30);
+        const derivedAppointment = rawText ? extractAppointmentFields({ text: rawText }, { evidenceDates }) : null;
+
+        const mergedAppointment = {
+          owner: {
+            last_name: firstReviewValue(appointmentData?.owner?.last_name, derivedAppointment?.owner?.last_name),
+            first_name: firstReviewValue(appointmentData?.owner?.first_name, derivedAppointment?.owner?.first_name),
+            middle_name: firstReviewValue(appointmentData?.owner?.middle_name, derivedAppointment?.owner?.middle_name),
+            date_of_birth: firstReviewValue(appointmentData?.owner?.date_of_birth, (derivedAppointment as any)?.owner?.date_of_birth),
+          },
+          position_title: firstReviewValue(appointmentData?.position_title, derivedAppointment?.position_title),
+          office_department: firstReviewValue(appointmentData?.office_department, derivedAppointment?.office_department),
+          sg: firstReviewValue(appointmentData?.sg, derivedAppointment?.sg),
+          step: firstReviewValue(appointmentData?.step, derivedAppointment?.step),
+          monthly_salary: firstReviewValue(appointmentData?.monthly_salary, derivedAppointment?.monthly_salary),
+          annual_salary: firstReviewValue(appointmentData?.annual_salary, derivedAppointment?.annual_salary),
+          appointment_date: firstReviewValue(appointmentData?.appointment_date, derivedAppointment?.appointment_date),
+          date_received: firstReviewValue(appointmentData?.date_received, derivedAppointment?.date_received),
+          date_approved: firstReviewValue(appointmentData?.date_approved, derivedAppointment?.date_approved),
+          plantilla_item_no: firstReviewValue(appointmentData?.plantilla_item_no, derivedAppointment?.plantilla_item_no),
+          nature_of_appointment: firstReviewValue(appointmentData?.nature_of_appointment, derivedAppointment?.nature_of_appointment),
+          status: firstReviewValue(appointmentData?.status, derivedAppointment?.status),
+          sg_from_salary: Boolean(appointmentData?.sg_from_salary ?? derivedAppointment?.sg_from_salary ?? false),
+        };
+
+        if (!linkedEmployeeRecord) return mergedAppointment;
+
+        const owner = mergedAppointment?.owner || null;
+        const hasOwnerName = Boolean(trimReview(owner?.last_name) && trimReview(owner?.first_name));
+        if (hasOwnerName) return mergedAppointment;
+
+        return {
+          ...mergedAppointment,
+          owner: {
+            last_name: linkedEmployeeRecord.last_name,
+            first_name: linkedEmployeeRecord.first_name,
+            middle_name: linkedEmployeeRecord.middle_name,
+            date_of_birth: linkedEmployeeRecord.date_of_birth,
+          },
+        };
+      })()
+    : null;
+  const genericOwner = extraction && !error
+    ? (() => {
+        const rawOwner = (extraction as any)?.raw_extracted_json?.owner_candidate || appointmentDataForDisplay?.owner || linkedEmployeeRecord || null;
+        const last = String(rawOwner?.last_name || "").trim() || null;
+        const first = String(rawOwner?.first_name || "").trim() || null;
+        if (!last || !first) return null;
+        return {
+          last_name: last,
+          first_name: first,
+          middle_name: String(rawOwner?.middle_name || "").trim() || null,
+          date_of_birth: String(rawOwner?.date_of_birth || "").trim() || null,
+        };
+      })()
+    : null;
 
   return (
     <AppShell
@@ -233,159 +336,32 @@ export default async function ReviewDetailPage({
 
           {/* TYPE-SPECIFIC EXTRACTION PANELS */}
           {(extraction as any)?.doc_type_final === "appointment" ? (
-            /* APPOINTMENT: Show appointment fields ONLY */
-            <div className="app-card p-4">
-              <div className="text-sm font-semibold text-app-text">Appointment Details</div>
-              <div className="mt-2 text-xs text-app-muted">
-                Appointment documents update Position, Office, SG, and Salary in the Masterlist.
-              </div>
-              <div className="mt-3 grid gap-2 text-sm">
-                <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Employee Name</div>
-                      <div className="mt-0.5 text-xs text-app-text">
-                        {(() => {
-                          const owner = (extraction as any)?.appointment_data?.owner;
-                          if (!owner) return "—";
-                          return `${owner.last_name}, ${owner.first_name}${owner.middle_name ? ' ' + owner.middle_name : ''}`;
-                        })()}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Position Title</div>
-                      <div className="mt-0.5 text-xs font-semibold text-app-primary">
-                        {(extraction as any)?.appointment_data?.position_title || "—"}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Office / Department</div>
-                      <div className="mt-0.5 text-xs text-app-text">
-                        {(extraction as any)?.appointment_data?.office_department || "—"}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Salary Grade (SG)</div>
-                      <div className="mt-0.5 text-xs font-semibold text-app-primary">
-                        {(extraction as any)?.appointment_data?.sg ? `SG-${(extraction as any).appointment_data.sg}` : "—"}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Monthly Salary</div>
-                      <div className="mt-0.5 text-xs font-semibold text-app-primary">
-                        {(() => {
-                          const salary = (extraction as any)?.appointment_data?.monthly_salary;
-                          if (!salary) return "—";
-                          return `₱${salary.toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                        })()}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Annual Salary</div>
-                      <div className="mt-0.5 text-xs text-app-text">
-                        {(() => {
-                          const salary = (extraction as any)?.appointment_data?.annual_salary;
-                          if (!salary) return "—";
-                          return `₱${salary.toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                        })()}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Date of Signing</div>
-                      <div className="mt-0.5 text-xs text-app-text">
-                        {formatIsoToDdMmYyyy((extraction as any)?.appointment_data?.appointment_date)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Confirm & Save Button for Appointment */}
-                <div className="rounded-lg border border-app-primary/25 bg-app-primary/5 px-3 py-3">
-                  <div className="text-xs font-semibold text-app-text">Confirm & Save to Masterlist</div>
-                  <div className="mt-1 text-[11px] text-app-muted">
-                    This will update the employee's Position, Office, SG, Salary, and Tenure.
-                  </div>
-                  <div className="mt-2">
-                    <CommitEmployeePanel
-                      extractionId={id}
-                      initialLinkedEmployeeId={linkedEmployeeIdFromDoc}
-                      owner={{
-                        last_name: (extraction as any)?.appointment_data?.owner?.last_name ?? null,
-                        first_name: (extraction as any)?.appointment_data?.owner?.first_name ?? null,
-                        middle_name: (extraction as any)?.appointment_data?.owner?.middle_name ?? null,
-                        date_of_birth: null, // Appointment forms don't have DOB
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <AppointmentDetailsPanel
+              extractionId={id}
+              initialLinkedEmployeeId={linkedEmployeeIdFromDoc}
+              initialAppointmentData={appointmentDataForDisplay}
+            />
           ) : (extraction as any)?.doc_type_final === "pds" ? (
-            /* PDS: Show personal info ONLY (no job fields) */
-            <div className="app-card p-4">
-              <div className="text-sm font-semibold text-app-text">Personal Information (PDS)</div>
-              <div className="mt-2 text-xs text-app-muted">
-                PDS extracts personal details only. Job fields (Position, Office, SG, Salary) are NOT updated from PDS.
-              </div>
-              {pdsPersonal?.displayFromDebugOnly ? (
-                <div className="app-alert-warning mt-2 text-[11px] leading-relaxed">
-                  Names below include OCR anchor lines that were not stored as <strong className="text-app-text">owner_candidate</strong> yet.
-                  Click <strong className="text-app-text">Run OCR</strong> again after this update, or fix the scan — otherwise Save to Masterlist may still ask for owner fields.
-                </div>
-              ) : null}
-              <div className="mt-3 grid gap-2 text-sm">
-                <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Last name</div>
-                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.last_name || "—"}</div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">First name</div>
-                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.first_name || "—"}</div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Middle name</div>
-                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.middle_name || "—"}</div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Date of birth</div>
-                      <div className="mt-0.5 text-xs text-app-text">
-                        {formatIsoToDdMmYyyy(pdsPersonal?.date_of_birth ?? null)}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
-                      <div className="text-[11px] font-semibold text-app-text">Sex at birth</div>
-                      <div className="mt-0.5 text-xs text-app-text">{pdsPersonal?.gender || "—"}</div>
-                    </div>
-                  </div>
-                </div>
+            <div className="grid gap-4">
+              <PdsPersonalInfoPanel
+                extractionId={id}
+                initialLinkedEmployeeId={linkedEmployeeIdFromDoc}
+                initialPersonalData={pdsPersonal}
+              />
 
-                <SexConfirm
-                  extractionId={id}
-                  canConfirm={Boolean(linkedEmployeeIdFromDoc)}
-                  initialValue={(pdsPersonal?.gender as "Male" | "Female" | null) || null}
-                  isConfirmed={Boolean((extraction as any).raw_extracted_json?.debug?.sex?.decision)}
-                />
+              <SexConfirm
+                extractionId={id}
+                canConfirm={Boolean(linkedEmployeeIdFromDoc)}
+                initialValue={(pdsPersonal?.gender as "Male" | "Female" | null) || null}
+                isConfirmed={Boolean((extraction as any).raw_extracted_json?.debug?.sex?.decision)}
+              />
 
-                <CommitEmployeePanel
-                  extractionId={id}
-                  initialLinkedEmployeeId={linkedEmployeeIdFromDoc}
-                  owner={{
-                    last_name: pdsPersonal?.last_name ?? null,
-                    first_name: pdsPersonal?.first_name ?? null,
-                    middle_name: pdsPersonal?.middle_name ?? null,
-                    date_of_birth: pdsPersonal?.date_of_birth ?? null,
-                  }}
-                />
-
-                <ExtractedPhotoPanel
-                  extractionId={id}
-                  initialEmployeeId={linkedEmployeeIdFromDoc}
-                  debugPhoto={(extraction as any).raw_extracted_json?.debug?.photo ?? null}
-                  sourcePages={photoSourcePages}
-                />
-              </div>
+              <ExtractedPhotoPanel
+                extractionId={id}
+                initialEmployeeId={linkedEmployeeIdFromDoc}
+                debugPhoto={(extraction as any).raw_extracted_json?.debug?.photo ?? null}
+                sourcePages={photoSourcePages}
+              />
             </div>
           ) : (
             /* ALL OTHER TYPES: Store only, no extraction */
@@ -400,7 +376,29 @@ export default async function ReviewDetailPage({
                   <span className="font-semibold text-app-primary">{(extraction as any)?.doc_type_final || "Unknown"}</span>
                 </div>
                 <div className="mt-2 text-[11px] text-app-muted">
-                  Use the Documents section below to preview and download.
+                  {genericOwner
+                    ? "Owner was detected from this file or the same upload batch. You can link it to the correct employee below if needed."
+                    : "Choose who owns this document below so it will be stored in that employee's Personal Info."}
+                </div>
+              </div>
+              <div className="mt-3 rounded-lg border border-app-primary/25 bg-app-primary/5 px-3 py-3">
+                <div className="text-xs font-semibold text-app-text">Save to Masterlist</div>
+                <div className="mt-1 text-[11px] text-app-muted">
+                  {genericOwner
+                    ? "Link this document to the employee record for the detected owner."
+                    : "Search and select the employee who owns this document."}
+                </div>
+                <div className="mt-2">
+                  <CommitEmployeePanel
+                    extractionId={id}
+                    initialLinkedEmployeeId={linkedEmployeeIdFromDoc}
+                    owner={{
+                      last_name: genericOwner?.last_name ?? null,
+                      first_name: genericOwner?.first_name ?? null,
+                      middle_name: genericOwner?.middle_name ?? null,
+                      date_of_birth: genericOwner?.date_of_birth ?? null,
+                    }}
+                  />
                 </div>
               </div>
             </div>
@@ -412,7 +410,28 @@ export default async function ReviewDetailPage({
               <div className="text-sm font-semibold text-app-text">Owner (OCR)</div>
               <div className="mt-2 grid gap-2 text-sm">
                 <div className="rounded-lg bg-app-surface-muted px-3 py-2 ring-1 ring-app-border/45">
-                  <div className="text-xs text-app-muted">No extraction available for this document type</div>
+                  {genericOwner ? (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                        <div className="text-[11px] font-semibold text-app-text">Last name</div>
+                        <div className="mt-0.5 text-xs text-app-text">{genericOwner.last_name}</div>
+                      </div>
+                      <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                        <div className="text-[11px] font-semibold text-app-text">First name</div>
+                        <div className="mt-0.5 text-xs text-app-text">{genericOwner.first_name}</div>
+                      </div>
+                      <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                        <div className="text-[11px] font-semibold text-app-text">Middle name</div>
+                        <div className="mt-0.5 text-xs text-app-text">{genericOwner.middle_name || "—"}</div>
+                      </div>
+                      <div className="rounded-md border border-app-border bg-app-surface px-2 py-1">
+                        <div className="text-[11px] font-semibold text-app-text">Date of birth</div>
+                        <div className="mt-0.5 text-xs text-app-text">{formatIsoToDdMmYyyy(genericOwner.date_of_birth)}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-app-muted">No owner was detected for this document yet</div>
+                  )}
                 </div>
               </div>
             </div>

@@ -29,6 +29,14 @@ type FileRow = {
   extractionId?: string;
 };
 
+type SearchEmployee = {
+  id: string;
+  last_name: string;
+  first_name: string;
+  middle_name: string | null;
+  date_of_birth: string | null;
+};
+
 const DOCUMENT_TYPE_OPTIONS = [
   { value: "auto-detect", label: "Auto-detect (recommended)" },
   { value: "pds", label: "PDS (CS Form 212)" },
@@ -57,6 +65,29 @@ function formatBytes(n: number) {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+function formatEmployeeName(employee: Pick<SearchEmployee, "last_name" | "first_name" | "middle_name">) {
+  const last = String(employee.last_name || "").trim();
+  const first = String(employee.first_name || "").trim();
+  const middle = String(employee.middle_name || "").trim();
+  return `${last}, ${first}${middle ? ` ${middle}` : ""}`.trim();
+}
+
+function formatEmployeeDob(value: string | null) {
+  if (!value) return "—";
+  const parts = String(value).split("-");
+  if (parts.length !== 3) return value;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
+function useDebouncedValue<T>(value: T, ms: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
 async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
   const q = items.slice();
   const runners = Array.from({ length: Math.max(1, limit) }, async () => {
@@ -76,10 +107,10 @@ function uploadOneWithProgress(opts: {
   extractionId?: string | null;
   documentSetId?: string | null;
   docTypeUserSelected: string | null;
+  ownerEmployeeId?: string | null;
   accessToken: string | null;
   onProgress: (p: number) => void;
-}): Promise<{ extraction_id: string; document_set_id: string | null }>
-{
+}): Promise<{ extraction_id: string; document_set_id: string | null }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload/file");
@@ -124,6 +155,7 @@ function uploadOneWithProgress(opts: {
     if (opts.extractionId) fd.append("extraction_id", String(opts.extractionId));
     if (opts.documentSetId) fd.append("document_set_id", String(opts.documentSetId));
     if (opts.docTypeUserSelected) fd.append("doc_type_user_selected", opts.docTypeUserSelected);
+    if (opts.ownerEmployeeId) fd.append("owner_employee_id", opts.ownerEmployeeId);
     fd.append("original_filename", opts.file.name);
     fd.append("mime_type", opts.file.type || "application/octet-stream");
     fd.append("file_size_bytes", String(opts.file.size || 0));
@@ -139,6 +171,11 @@ export function UploadClient() {
   const [state, setState] = useState<UploadState>({ status: "idle" });
   const [docTypeUserSelected, setDocTypeUserSelected] = useState<string>("auto-detect");
   const [separateExtractionPerFile, setSeparateExtractionPerFile] = useState<boolean>(false);
+  const [ownerSearch, setOwnerSearch] = useState("");
+  const [ownerSearchResults, setOwnerSearchResults] = useState<SearchEmployee[]>([]);
+  const [ownerSearchState, setOwnerSearchState] = useState<"idle" | "loading" | "error">("idle");
+  const [selectedOwner, setSelectedOwner] = useState<SearchEmployee | null>(null);
+  const debouncedOwnerSearch = useDebouncedValue(ownerSearch, 300);
 
   useEffect(() => {
     let cancelled = false;
@@ -176,12 +213,70 @@ export function UploadClient() {
   const doneCount = rows.filter((r) => r.status === "done").length;
   const errorCount = rows.filter((r) => r.status === "error").length;
   const showAutoSplitHint = docTypeUserSelected === "auto-detect" && rows.length > 1;
+  const requiresOwnerSelection = docTypeUserSelected !== "auto-detect" && docTypeUserSelected !== "pds";
+
+  useEffect(() => {
+    if (!requiresOwnerSelection) {
+      setOwnerSearch("");
+      setOwnerSearchResults([]);
+      setOwnerSearchState("idle");
+      setSelectedOwner(null);
+    }
+  }, [requiresOwnerSelection]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (!requiresOwnerSelection) {
+        setOwnerSearchResults([]);
+        setOwnerSearchState("idle");
+        return;
+      }
+
+      const q = debouncedOwnerSearch.trim();
+      if (!q) {
+        setOwnerSearchResults([]);
+        setOwnerSearchState("idle");
+        return;
+      }
+
+      setOwnerSearchState("loading");
+      try {
+        const url = new URL(`${window.location.origin}/api/masterlist/employees`);
+        url.searchParams.set("q", q);
+        url.searchParams.set("page", "1");
+        url.searchParams.set("pageSize", "10");
+
+        const res = await fetch(url.toString(), { credentials: "include" });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || res.statusText);
+        const json = JSON.parse(text) as { employees: SearchEmployee[] };
+        if (cancelled) return;
+        setOwnerSearchResults(json.employees || []);
+        setOwnerSearchState("idle");
+      } catch {
+        if (cancelled) return;
+        setOwnerSearchState("error");
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedOwnerSearch, requiresOwnerSelection]);
 
   async function onUpload(e?: React.FormEvent) {
     e?.preventDefault();
 
     if (rows.length === 0) {
       setState({ status: "error", message: "Please choose a file first." });
+      return;
+    }
+
+    if (requiresOwnerSelection && !selectedOwner?.id) {
+      setState({ status: "error", message: "Please select who owns this document before uploading." });
       return;
     }
 
@@ -254,6 +349,7 @@ export function UploadClient() {
             extractionId: null,
             documentSetId: null,
             docTypeUserSelected: docTypeUserSelected === "auto-detect" ? null : docTypeUserSelected,
+            ownerEmployeeId: selectedOwner?.id ?? null,
             accessToken,
             onProgress: (p) => {
               setRows((prev) => prev.map((r) => (r.id === first.id ? { ...r, progress: p } : r)));
@@ -284,6 +380,7 @@ export function UploadClient() {
             extractionId: shouldSeparatePerFile ? null : batchExtractionId,
             documentSetId: shouldSeparatePerFile ? null : batchDocumentSetId,
             docTypeUserSelected: docTypeUserSelected === "auto-detect" ? null : docTypeUserSelected,
+            ownerEmployeeId: selectedOwner?.id ?? null,
             accessToken,
             onProgress: (p) => {
               setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, progress: p } : r)));
@@ -299,7 +396,7 @@ export function UploadClient() {
         }
       });
 
-      setState({ status: "done", batchId: effectiveBatchId, extractionIds });
+      setState({ status: "done", batchId: effectiveBatchId, extractionIds: Array.from(new Set(extractionIds)) });
     } catch (err) {
       console.error(err);
       setState({
@@ -320,7 +417,7 @@ export function UploadClient() {
       <form className="mt-6 flex flex-col gap-4" onSubmit={onUpload}>
         {showAutoSplitHint ? (
           <div className="app-alert-info">
-            Mixed uploads are detected automatically. Each file will be kept separate so the correct owner can be reviewed.
+            Bulk auto-detect uploads stay in one batch and each file is separated automatically for accurate review.
           </div>
         ) : null}
 
@@ -342,10 +439,67 @@ export function UploadClient() {
           </select>
           <p className="app-prose-muted mt-2 text-xs">
             {docTypeUserSelected === "auto-detect"
-              ? "The system detects the document type automatically. Use for mixed or unknown files."
+              ? "The system detects the document type automatically. Multiple files upload as one batch and are separated automatically for review."
               : "Detection is skipped; fields are extracted for the selected type only."}
           </p>
         </div>
+
+        {requiresOwnerSelection ? (
+          <div className="rounded-xl border border-app-border bg-app-surface-muted p-4">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-app-muted">
+              Document owner <span className="text-app-danger">*</span>
+            </label>
+            <input
+              value={ownerSearch}
+              onChange={(e) => setOwnerSearch(e.target.value)}
+              placeholder="Search employee name"
+              className="app-input mt-2"
+            />
+            <p className="app-prose-muted mt-2 text-xs">
+              Choose who owns this document before upload so the file is stored under the correct employee.
+            </p>
+            {ownerSearchState === "loading" ? <div className="mt-2 text-xs text-app-muted">Searching…</div> : null}
+            {ownerSearchState === "error" ? <div className="mt-2 text-xs text-app-danger">Search failed</div> : null}
+
+            {ownerSearchResults.length > 0 ? (
+              <div className="mt-3 max-h-[180px] overflow-auto rounded-lg border border-app-border bg-app-surface">
+                {ownerSearchResults.map((employee) => (
+                  <button
+                    key={employee.id}
+                    type="button"
+                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-app-surface-muted ${
+                      selectedOwner?.id === employee.id ? "bg-app-primary/10" : ""
+                    }`}
+                    onClick={() => {
+                      setSelectedOwner(employee);
+                      setState({ status: "idle" });
+                    }}
+                  >
+                    <span className="text-app-text">{formatEmployeeName(employee)}</span>
+                    <span className="font-mono text-xs text-app-muted">{formatEmployeeDob(employee.date_of_birth)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-app-muted">Selected owner:</span>
+              <span className="font-medium text-app-text">{selectedOwner ? formatEmployeeName(selectedOwner) : "(none)"}</span>
+              {selectedOwner ? (
+                <button
+                  type="button"
+                  className="app-btn-ghost px-2 py-1 text-xs"
+                  onClick={() => {
+                    setSelectedOwner(null);
+                    setState({ status: "idle" });
+                  }}
+                >
+                  Clear owner
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex items-start gap-3 rounded-xl border border-app-border bg-app-surface-muted/80 p-4">
           <input
@@ -449,7 +603,7 @@ export function UploadClient() {
           </div>
           <button
             type="submit"
-            disabled={state.status === "uploading" || !docTypeUserSelected || rows.length === 0}
+            disabled={state.status === "uploading" || !docTypeUserSelected || rows.length === 0 || (requiresOwnerSelection && !selectedOwner)}
             className="app-btn-primary w-full py-3 sm:w-auto sm:min-w-[220px]"
           >
             {state.status === "uploading" ? "Uploading…" : "Upload files"}

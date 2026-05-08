@@ -44,6 +44,21 @@ function middleNameCompatible(a: any, b: any) {
   return left[0] === right[0] || left.startsWith(right) || right.startsWith(left);
 }
 
+function normalizeNullableString(value: unknown) {
+  const trimmed = String(value ?? "").trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function hasOwn(obj: unknown, key: string) {
+  return Boolean(obj && typeof obj === "object" && Object.prototype.hasOwnProperty.call(obj, key));
+}
+
 export async function POST(request: Request) {
   try {
   const supabase = await createSupabaseServerClient();
@@ -71,6 +86,8 @@ export async function POST(request: Request) {
   const chosenEmployeeIdRaw = body.employee_id === null || body.employee_id === undefined ? null : String(body.employee_id);
   const forceCreateNew = Boolean(body.force_create_new);
   const confirm = body.confirm === null || body.confirm === undefined ? null : String(body.confirm);
+  const ownerOverride = body.owner_override && typeof body.owner_override === "object" ? body.owner_override : null;
+  const appointmentOverride = body.appointment_override && typeof body.appointment_override === "object" ? body.appointment_override : null;
 
   console.log("[DEBUG COMMIT] Request body:", body);
 
@@ -111,56 +128,103 @@ export async function POST(request: Request) {
   }
 
   const rawJson = ((extraction as any)?.raw_extracted_json || {}) as any;
-  const appointmentData = rawJson?.appointment_data || (extraction as any)?.appointment_data || {};
+  const appointmentDataBase = rawJson?.appointment_data || (extraction as any)?.appointment_data || {};
   const ownerFromRaw = rawJson?.owner_candidate || {};
-  const ownerFromAppt = appointmentData?.owner || {};
+  const ownerFromAppt = appointmentDataBase?.owner || {};
+  const ownerOverrideValue = (key: string) => hasOwn(ownerOverride, key) ? normalizeNullableString((ownerOverride as any)?.[key]) : undefined;
+  const appointmentOverrideStringValue = (key: string) => hasOwn(appointmentOverride, key) ? normalizeNullableString((appointmentOverride as any)?.[key]) : undefined;
+  const appointmentOverrideNumberValue = (key: string) => hasOwn(appointmentOverride, key) ? normalizeNullableNumber((appointmentOverride as any)?.[key]) : undefined;
 
   const ownerCandidate = {
-    last_name: String(ownerFromRaw.last_name || ownerFromAppt.last_name || "").trim(),
-    first_name: String(ownerFromRaw.first_name || ownerFromAppt.first_name || "").trim(),
+    last_name: ownerOverrideValue("last_name") ?? normalizeNullableString(ownerFromRaw.last_name) ?? normalizeNullableString(ownerFromAppt.last_name) ?? "",
+    first_name: ownerOverrideValue("first_name") ?? normalizeNullableString(ownerFromRaw.first_name) ?? normalizeNullableString(ownerFromAppt.first_name) ?? "",
     middle_name:
-      ownerFromRaw.middle_name || ownerFromAppt.middle_name
-        ? String(ownerFromRaw.middle_name || ownerFromAppt.middle_name || "").trim() || null
-        : null,
-    name_extension: ownerFromRaw.name_extension
-      ? String(ownerFromRaw.name_extension).trim()
-      : ownerFromAppt.name_extension
-        ? String(ownerFromAppt.name_extension).trim()
-        : null,
+      ownerOverrideValue("middle_name") ??
+      normalizeNullableString(ownerFromRaw.middle_name) ??
+      normalizeNullableString(ownerFromAppt.middle_name),
+    name_extension: normalizeNullableString(ownerFromRaw.name_extension) || normalizeNullableString(ownerFromAppt.name_extension),
     date_of_birth:
-      ownerFromRaw.date_of_birth || ownerFromAppt.date_of_birth
-        ? String(ownerFromRaw.date_of_birth || ownerFromAppt.date_of_birth || "").trim() || null
-        : null,
-    gender: ownerFromRaw.gender
-      ? String(ownerFromRaw.gender).trim()
-      : ownerFromAppt.gender
-        ? String(ownerFromAppt.gender).trim()
-        : null,
+      ownerOverrideValue("date_of_birth") ??
+      normalizeNullableString(ownerFromRaw.date_of_birth) ??
+      normalizeNullableString(ownerFromAppt.date_of_birth),
+    gender:
+      ownerOverrideValue("gender") ??
+      normalizeNullableString(ownerFromRaw.gender) ??
+      normalizeNullableString(ownerFromAppt.gender),
   };
 
-  if (!ownerCandidate.last_name || !ownerCandidate.first_name) {
+  const appointmentData = {
+    ...appointmentDataBase,
+    ...(appointmentOverride || {}),
+    owner: {
+      ...(appointmentDataBase?.owner || {}),
+      ...(appointmentOverride?.owner || {}),
+      last_name: ownerCandidate.last_name,
+      first_name: ownerCandidate.first_name,
+      middle_name: ownerCandidate.middle_name,
+      date_of_birth: ownerCandidate.date_of_birth,
+      gender: ownerCandidate.gender,
+    },
+    position_title: appointmentOverrideStringValue("position_title") ?? normalizeNullableString(appointmentDataBase?.position_title),
+    office_department: appointmentOverrideStringValue("office_department") ?? normalizeNullableString(appointmentDataBase?.office_department),
+    sg: appointmentOverrideNumberValue("sg") ?? normalizeNullableNumber(appointmentDataBase?.sg),
+    step: appointmentOverrideNumberValue("step") ?? normalizeNullableNumber(appointmentDataBase?.step),
+    monthly_salary: appointmentOverrideNumberValue("monthly_salary") ?? normalizeNullableNumber(appointmentDataBase?.monthly_salary),
+    annual_salary: appointmentOverrideNumberValue("annual_salary") ?? normalizeNullableNumber(appointmentDataBase?.annual_salary),
+    appointment_date: appointmentOverrideStringValue("appointment_date") ?? normalizeNullableString(appointmentDataBase?.appointment_date),
+  };
+
+  const alreadyLinked = doc.employee_id ? String(doc.employee_id) : null;
+  const primaryEmployeeId = alreadyLinked || null;
+  const docTypeFinal = String((extraction as any).doc_type_final || "").toLowerCase();
+  const isAppointment = docTypeFinal === "appointment";
+  const isPds = docTypeFinal === "pds";
+
+  const hasOwnerCandidateName = Boolean(ownerCandidate.last_name && ownerCandidate.first_name);
+
+  if (!chosenEmployeeIdRaw && !primaryEmployeeId && !hasOwnerCandidateName) {
     return new NextResponse("Owner candidate is missing last_name/first_name. Fix Owner fields first.", { status: 400 });
   }
 
-  if (looksLikePlaceholderName(ownerCandidate.last_name) || looksLikePlaceholderName(ownerCandidate.first_name)) {
+  if (
+    !chosenEmployeeIdRaw &&
+    !primaryEmployeeId &&
+    hasOwnerCandidateName &&
+    (looksLikePlaceholderName(ownerCandidate.last_name) || looksLikePlaceholderName(ownerCandidate.first_name))
+  ) {
     return new NextResponse("Owner candidate looks invalid (placeholder name). Re-run OCR with a clearer scan.", {
       status: 400,
     });
   }
 
-  const alreadyLinked = doc.employee_id ? String(doc.employee_id) : null;
-  const primaryEmployeeId = alreadyLinked || null;
-
   const patchCommittedExtraction = (employeeId: string) =>
     ({
       status: "committed" as const,
+      appointment_data: appointmentData,
       raw_extracted_json: {
         ...(extraction as any).raw_extracted_json,
+        owner_candidate: ownerCandidate,
         owner_employee_id: employeeId,
+        appointment_data: appointmentData,
       },
       linked_employee_id: employeeId,
       updated_by: user.id,
     }) as Record<string, unknown>;
+
+  const patchExtractionWithManualCorrections = async () => {
+    await supabase
+      .from("extractions")
+      .update({
+        appointment_data: appointmentData,
+        raw_extracted_json: {
+          ...(extraction as any).raw_extracted_json,
+          owner_candidate: ownerCandidate,
+          appointment_data: appointmentData,
+        },
+        updated_by: user.id,
+      } as any)
+      .eq("id", extractionId);
+  };
 
   // Helper: Link ALL documents in the same document_set/batch to the employee
   const linkAllDocs = async (employeeId: string) => {
@@ -306,9 +370,6 @@ export async function POST(request: Request) {
 
   // Helper: Save appointment fields to employee record
   const saveAppointmentFields = async (employeeId: string) => {
-    const rawJson = (extraction as any)?.raw_extracted_json;
-    const appointmentData = rawJson?.appointment_data || (extraction as any)?.appointment_data;
-    
     console.log("[DEBUG] saveAppointmentFields called for employee:", employeeId);
     console.log("[DEBUG] appointment_data found:", !!appointmentData);
     console.log("[DEBUG] appointment_data content:", JSON.stringify(appointmentData, null, 2));
@@ -358,12 +419,44 @@ export async function POST(request: Request) {
     }
   };
 
+  const savePdsPersonalFields = async (employeeId: string) => {
+    if (!isPds) {
+      return;
+    }
+
+    const patch: any = {};
+    if (ownerCandidate.last_name) patch.last_name = ownerCandidate.last_name;
+    if (ownerCandidate.first_name) patch.first_name = ownerCandidate.first_name;
+    if (hasOwn(ownerOverride, "middle_name")) patch.middle_name = ownerCandidate.middle_name;
+    else if (ownerCandidate.middle_name) patch.middle_name = ownerCandidate.middle_name;
+    if (ownerCandidate.date_of_birth) patch.date_of_birth = ownerCandidate.date_of_birth;
+    if (ownerCandidate.gender) patch.gender = ownerCandidate.gender;
+
+    if (ownerCandidate.date_of_birth) {
+      const computedAge = computeAgeAndGroupFromDobIso(ownerCandidate.date_of_birth);
+      patch.age = computedAge.age;
+      patch.age_group = computedAge.age_group;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return;
+    }
+
+    const { error: updateError } = await supabase.from("employees").update(patch).eq("id", employeeId);
+    if (updateError) {
+      console.error("[COMMIT] Failed to update PDS personal fields:", updateError);
+      throw new Error(updateError.message || "Failed to update PDS personal fields");
+    }
+  };
+
   // 1) If UI selected an employee explicitly, link to it.
   if (chosenEmployeeIdRaw) {
     const chosenEmployeeId = chosenEmployeeIdRaw;
 
+    await patchExtractionWithManualCorrections();
     await linkAllDocs(chosenEmployeeId);
     await backfillOwnerMatchedDocs(chosenEmployeeId);
+    await savePdsPersonalFields(chosenEmployeeId);
     await saveAppointmentFields(chosenEmployeeId);
 
     // Mark committed.
@@ -380,12 +473,26 @@ export async function POST(request: Request) {
 
   // 2) If already linked (doc.employee_id), treat that as the primary key.
   if (primaryEmployeeId) {
+    await patchExtractionWithManualCorrections();
     await linkAllDocs(primaryEmployeeId);
     await backfillOwnerMatchedDocs(primaryEmployeeId);
+    await savePdsPersonalFields(primaryEmployeeId);
 
     // Update appointment fields first
     await saveAppointmentFields(primaryEmployeeId);
-    
+
+    if (isPds) {
+      await supabase.from("extractions").update(patchCommittedExtraction(primaryEmployeeId)).eq("id", extractionId);
+
+      try {
+        revalidatePath("/masterlist");
+      } catch {
+        // ignore
+      }
+
+      return NextResponse.json({ ok: true, employee_id: primaryEmployeeId, action: "already_linked" });
+    }
+
     // Consider updating missing demographics, but don't overwrite.
     const dobIso = ownerCandidate.date_of_birth || null;
     const computedAge = dobIso ? computeAgeAndGroupFromDobIso(dobIso) : { age: null, age_group: null };
@@ -471,8 +578,10 @@ export async function POST(request: Request) {
     const exact = possible.filter((c: any) => String(c.date_of_birth || "") === dobIso);
     if (exact.length === 1 && !forceCreateNew && confirm !== "no") {
       const targetId = String(exact[0].id);
+      await patchExtractionWithManualCorrections();
       await linkAllDocs(targetId);
       await backfillOwnerMatchedDocs(targetId);
+      await savePdsPersonalFields(targetId);
       await saveAppointmentFields(targetId);
 
       await supabase.from("extractions").update(patchCommittedExtraction(targetId)).eq("id", extractionId);
@@ -505,9 +614,6 @@ export async function POST(request: Request) {
     });
   }
 
-  const docTypeFinal = String((extraction as any).doc_type_final || "").toLowerCase();
-  const isAppointment = docTypeFinal === "appointment";
-
   // Explicit new record (even when similar names exist): user chose from confirmation UI.
   if (forceCreateNew && !isAppointment) {
     const dobForAge = ownerCandidate.date_of_birth || null;
@@ -534,8 +640,10 @@ export async function POST(request: Request) {
     }
 
     const newId = String(inserted.id);
+    await patchExtractionWithManualCorrections();
     await linkAllDocs(newId);
     await backfillOwnerMatchedDocs(newId);
+    await savePdsPersonalFields(newId);
     await saveAppointmentFields(newId);
 
     await supabase.from("extractions").update(patchCommittedExtraction(newId)).eq("id", extractionId);
@@ -568,8 +676,10 @@ export async function POST(request: Request) {
   if (possible.length === 1 && !forceCreateNew) {
     const targetId = String(possible[0].id);
 
+    await patchExtractionWithManualCorrections();
     await linkAllDocs(targetId);
     await backfillOwnerMatchedDocs(targetId);
+    await savePdsPersonalFields(targetId);
     await saveAppointmentFields(targetId);
 
     await supabase.from("extractions").update(patchCommittedExtraction(targetId)).eq("id", extractionId);

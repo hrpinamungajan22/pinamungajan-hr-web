@@ -67,7 +67,6 @@ export function StaffManagementClient() {
         mode: string;
         username?: string;
         owner_name?: string;
-        generatedPassword: string | null;
       };
       setUsername("");
       setOwnerName("");
@@ -79,9 +78,6 @@ export function StaffManagementClient() {
       }
       if (json.owner_name) {
         lines.push(`Owner: ${json.owner_name}`);
-      }
-      if (json.generatedPassword) {
-        lines.push(`Password (copy now): ${json.generatedPassword}`);
       }
       setMessage(lines.join(" "));
       await load();
@@ -158,12 +154,12 @@ export function StaffManagementClient() {
         <input
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password (optional — auto-generated if empty)"
+          placeholder="Password"
           className="app-input"
           autoComplete="new-password"
         />
         <button
-          disabled={loading || !username.trim() || !ownerName.trim()}
+          disabled={loading || !username.trim() || !ownerName.trim() || !password.trim()}
           onClick={createOrPromote}
           className="app-btn-primary"
         >

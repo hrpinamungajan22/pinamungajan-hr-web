@@ -173,6 +173,39 @@ function looksLikePlaceholderName(s: string) {
   return false;
 }
 
+function middleNameCompatible(leftValue: unknown, rightValue: unknown) {
+  const left = normalizeNameForMatch(String(leftValue || ""));
+  const right = normalizeNameForMatch(String(rightValue || ""));
+  if (!left || !right) return true;
+  if (left === right) return true;
+  return left[0] === right[0] || left.startsWith(right) || right.startsWith(left);
+}
+
+function buildOwnerCandidateFromSource(owner: any) {
+  const candidate = {
+    last_name: String(owner?.last_name || "").trim() || null,
+    first_name: String(owner?.first_name || "").trim() || null,
+    middle_name: String(owner?.middle_name || "").trim() || null,
+    date_of_birth: String(owner?.date_of_birth || "").trim() || null,
+    gender: String(owner?.gender || "").trim() || null,
+    confidence: Number(owner?.confidence || 0) || 0,
+  };
+  if (!candidate.last_name || !candidate.first_name) return null;
+  if (looksLikePlaceholderName(candidate.last_name) || looksLikePlaceholderName(candidate.first_name)) return null;
+  return sanitizeOwnerCandidateNames(candidate);
+}
+
+function ownerCandidatesLookCompatible(leftOwner: any, rightOwner: any) {
+  const left = buildOwnerCandidateFromSource(leftOwner);
+  const right = buildOwnerCandidateFromSource(rightOwner);
+  if (!left || !right) return false;
+  if (normalizeNameForMatch(String(left.last_name || "")) !== normalizeNameForMatch(String(right.last_name || ""))) return false;
+  if (normalizeNameForMatch(String(left.first_name || "")) !== normalizeNameForMatch(String(right.first_name || ""))) return false;
+  if (!middleNameCompatible(left.middle_name, right.middle_name)) return false;
+  if (left.date_of_birth && right.date_of_birth && String(left.date_of_birth) !== String(right.date_of_birth)) return false;
+  return true;
+}
+
 function formatValidation(which: string, res: { ok: boolean; reasons: string[] }) {
   if (res.ok) return null;
   return `${which}:${res.reasons.join(",")}`;
@@ -328,6 +361,269 @@ export async function POST(request: Request) {
 
   const batchDocs = await loadBatchDocuments();
   if (batchDocs.length === 0) return new NextResponse("No documents found", { status: 404 });
+
+  const resolveEmployeeForOwnerCandidate = async (candidate: any): Promise<{ id: string | null; warning: string | null }> => {
+    const resolvedCandidate = buildOwnerCandidateFromSource(candidate);
+    if (!resolvedCandidate) return { id: null, warning: null };
+
+    const last = String(resolvedCandidate.last_name || "").trim();
+    const first = String(resolvedCandidate.first_name || "").trim();
+    const dobIso = String(resolvedCandidate.date_of_birth || "").trim() || null;
+    const normKey = normalizeNameForMatch(`${last} ${first} ${resolvedCandidate.middle_name || ""}`);
+
+    const { data: candidates } = await supabase
+      .from("employees")
+      .select("id, last_name, first_name, middle_name, date_of_birth")
+      .ilike("last_name", last)
+      .ilike("first_name", first)
+      .limit(25);
+
+    const nameKeyMatches = (candidates || []).filter((row: any) => {
+      const rowKey = normalizeNameForMatch(`${row.last_name || ""} ${row.first_name || ""} ${row.middle_name || ""}`);
+      return rowKey === normKey;
+    });
+
+    return resolveOwnerEmployeeForOcrNameMatches(nameKeyMatches, dobIso);
+  };
+
+  const inheritOwnerContextFromBatch = async (): Promise<{
+    ownerCandidate: any;
+    ownerMethodUsed: string;
+    ownerEmployeeId: string | null;
+    ownerLinkWarning: string | null;
+  } | null> => {
+    const batchId = (extraction as any)?.batch_id ? String((extraction as any).batch_id) : "";
+    if (!batchId) return null;
+
+    const { data: siblingExtractions, error: siblingErr } = await supabase
+      .from("extractions")
+      .select("id, linked_employee_id, raw_extracted_json, appointment_data")
+      .eq("batch_id", batchId)
+      .neq("id", extractionId)
+      .order("created_at", { ascending: true })
+      .limit(100);
+
+    if (siblingErr || !siblingExtractions || siblingExtractions.length === 0) {
+      return null;
+    }
+
+    const linkedEmployeeIds = Array.from(
+      new Set(
+        siblingExtractions
+          .map((row: any) => String(row?.linked_employee_id || row?.raw_extracted_json?.owner_employee_id || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (linkedEmployeeIds.length === 1) {
+      const employeeId = String(linkedEmployeeIds[0]);
+      const { data: employee } = await supabase
+        .from("employees")
+        .select("id, last_name, first_name, middle_name, date_of_birth, gender")
+        .eq("id", employeeId)
+        .single();
+
+      const employeeOwnerCandidate = buildOwnerCandidateFromSource({
+        last_name: employee?.last_name,
+        first_name: employee?.first_name,
+        middle_name: employee?.middle_name,
+        date_of_birth: employee?.date_of_birth,
+        gender: employee?.gender,
+        confidence: 0.99,
+      });
+
+      if (employeeOwnerCandidate) {
+        return {
+          ownerCandidate: employeeOwnerCandidate,
+          ownerMethodUsed: "batch_linked_employee",
+          ownerEmployeeId: employeeId,
+          ownerLinkWarning: null,
+        };
+      }
+    }
+
+    const knownOwners: any[] = [];
+    for (const row of siblingExtractions) {
+      const rawOwner = row?.raw_extracted_json?.owner_candidate || row?.raw_extracted_json?.appointment_data?.owner || row?.appointment_data?.owner || null;
+      const candidate = buildOwnerCandidateFromSource(rawOwner);
+      if (!candidate) continue;
+      const existing = knownOwners.find((owner) => ownerCandidatesLookCompatible(owner, candidate));
+      if (existing) {
+        if (!existing.date_of_birth && candidate.date_of_birth) existing.date_of_birth = candidate.date_of_birth;
+        if (!existing.gender && candidate.gender) existing.gender = candidate.gender;
+        existing.confidence = Math.max(Number(existing.confidence || 0), Number(candidate.confidence || 0));
+      } else {
+        knownOwners.push(candidate);
+      }
+    }
+
+    if (knownOwners.length !== 1) {
+      return null;
+    }
+
+    const inheritedOwner = buildOwnerCandidateFromSource({ ...knownOwners[0], confidence: Math.max(Number(knownOwners[0]?.confidence || 0), 0.85) });
+    if (!inheritedOwner) return null;
+
+    const resolved = await resolveEmployeeForOwnerCandidate(inheritedOwner);
+    return {
+      ownerCandidate: inheritedOwner,
+      ownerMethodUsed: "batch_owner_context",
+      ownerEmployeeId: resolved.id ? String(resolved.id) : null,
+      ownerLinkWarning: resolved.warning,
+    };
+  };
+
+  const propagateOwnerContextToBatch = async (input: {
+    ownerCandidate: any;
+    ownerEmployeeId: string | null;
+    ownerLinkWarning: string | null;
+  }) => {
+    const batchId = (extraction as any)?.batch_id ? String((extraction as any).batch_id) : "";
+    const canonicalOwner = buildOwnerCandidateFromSource(input.ownerCandidate);
+    if (!batchId || !canonicalOwner) return;
+
+    const { data: siblingExtractions, error: siblingErr } = await supabase
+      .from("extractions")
+      .select("id, document_id, status, linked_employee_id, raw_extracted_json, appointment_data")
+      .eq("batch_id", batchId)
+      .neq("id", chosenExtractionId)
+      .limit(100);
+
+    if (siblingErr || !siblingExtractions || siblingExtractions.length === 0) return;
+
+    const conflictingEmployeeIds = Array.from(
+      new Set(
+        siblingExtractions
+          .map((row: any) => String(row?.linked_employee_id || row?.raw_extracted_json?.owner_employee_id || "").trim())
+          .filter(Boolean)
+      )
+    ).filter((employeeId) => !input.ownerEmployeeId || employeeId !== input.ownerEmployeeId);
+
+    if (conflictingEmployeeIds.length > 0) {
+      console.warn("[OCR] Skipping batch owner propagation due to conflicting linked employee IDs", {
+        batchId,
+        chosenExtractionId,
+        conflictingEmployeeIds,
+      });
+      return;
+    }
+
+    const hasConflictingOwner = siblingExtractions.some((row: any) => {
+      const existingOwner =
+        row?.raw_extracted_json?.owner_candidate ||
+        row?.raw_extracted_json?.appointment_data?.owner ||
+        row?.appointment_data?.owner ||
+        null;
+      if (!existingOwner) return false;
+      return !ownerCandidatesLookCompatible(existingOwner, canonicalOwner);
+    });
+
+    if (hasConflictingOwner) {
+      console.warn("[OCR] Skipping batch owner propagation due to conflicting owner candidates", {
+        batchId,
+        chosenExtractionId,
+      });
+      return;
+    }
+
+    for (const row of siblingExtractions) {
+      const existingRaw = (row as any)?.raw_extracted_json || {};
+      const existingOwner = buildOwnerCandidateFromSource(
+        existingRaw?.owner_candidate || existingRaw?.appointment_data?.owner || (row as any)?.appointment_data?.owner || null
+      );
+      const mergedOwner = buildOwnerCandidateFromSource({
+        ...canonicalOwner,
+        ...(existingOwner || {}),
+        date_of_birth: existingOwner?.date_of_birth || canonicalOwner.date_of_birth,
+        gender: existingOwner?.gender || canonicalOwner.gender,
+        confidence: Math.max(Number(existingOwner?.confidence || 0), Number(canonicalOwner.confidence || 0)),
+      });
+
+      if (!mergedOwner) continue;
+
+      const patch: any = {
+        raw_extracted_json: {
+          ...existingRaw,
+          owner_candidate: mergedOwner,
+          owner_employee_id: input.ownerEmployeeId || existingRaw?.owner_employee_id || null,
+          debug: {
+            ...(existingRaw?.debug || {}),
+            ownerMethod: existingRaw?.debug?.ownerMethod || "batch_owner_propagation",
+            ownerLinkWarning: input.ownerLinkWarning || existingRaw?.debug?.ownerLinkWarning || null,
+            ownerPendingReason:
+              input.ownerEmployeeId || existingRaw?.debug?.ownerPendingReason === null
+                ? null
+                : existingRaw?.debug?.ownerPendingReason || "owner_detected_but_not_registered",
+            owner: {
+              ...(existingRaw?.debug?.owner || {}),
+              methodUsed: existingRaw?.debug?.owner?.methodUsed || "batch_owner_propagation",
+            },
+          },
+        },
+      };
+
+      if (input.ownerEmployeeId) {
+        patch.linked_employee_id = input.ownerEmployeeId;
+      }
+
+      await supabase.from("extractions").update(patch).eq("id", String((row as any).id));
+    }
+
+    if (input.ownerEmployeeId) {
+      await supabase
+        .from("employee_documents")
+        .update({ employee_id: input.ownerEmployeeId })
+        .eq("batch_id", batchId);
+
+      await supabase
+        .from("extractions")
+        .update({ linked_employee_id: input.ownerEmployeeId } as any)
+        .eq("batch_id", batchId);
+    }
+  };
+
+  const linkResolvedEmployeeToUploadGroup = async (employeeId: string) => {
+    const documentSetId = (extraction as any)?.document_set_id ? String((extraction as any).document_set_id) : null;
+    const batchId = (extraction as any)?.batch_id ? String((extraction as any).batch_id) : null;
+
+    if (documentSetId) {
+      await supabase
+        .from("employee_documents")
+        .update({ employee_id: employeeId })
+        .eq("document_set_id", documentSetId);
+
+      await supabase
+        .from("extractions")
+        .update({ linked_employee_id: employeeId } as any)
+        .eq("document_set_id", documentSetId);
+      return;
+    }
+
+    if (batchId) {
+      await supabase
+        .from("employee_documents")
+        .update({ employee_id: employeeId })
+        .eq("batch_id", batchId);
+
+      await supabase
+        .from("extractions")
+        .update({ linked_employee_id: employeeId } as any)
+        .eq("batch_id", batchId);
+      return;
+    }
+
+    if ((extraction as any)?.document_id) {
+      await supabase
+        .from("employee_documents")
+        .update({ employee_id: employeeId })
+        .eq("id", (extraction as any).document_id);
+    }
+
+    await supabase
+      .from("extractions")
+      .update({ linked_employee_id: employeeId } as any)
+      .eq("id", chosenExtractionId);
+  };
 
   let fullTextAll = "";
   let tokensAll: DocToken[] = [];
@@ -1151,11 +1447,57 @@ export async function POST(request: Request) {
           }
 
           if (Object.keys(patch).length > 0) {
-            if (updatedById) patch.updated_by = updatedById;
             await supabase.from("employees").update(patch).eq("id", ownerEmployeeId);
+          }
+        } else if (nameKeyMatches.length === 0) {
+          const detectedGender = (ownerCandidate as any).gender ?? null;
+          const computedAge = dobIso ? computeAgeAndGroupFromDobIso(dobIso) : { age: null as number | null, age_group: null as string | null };
+
+          const { data: inserted, error: insertErr } = await supabase
+            .from("employees")
+            .insert({
+              last_name: last,
+              first_name: first,
+              middle_name: String((ownerCandidate as any).middle_name || "").trim() || null,
+              name_extension: String((ownerCandidate as any).name_extension || "").trim() || null,
+              date_of_birth: dobIso || null,
+              gender: detectedGender,
+              age: computedAge.age,
+              age_group: computedAge.age_group,
+            } as any)
+            .select("id")
+            .single();
+
+          if (!insertErr && inserted?.id) {
+            ownerEmployeeId = String(inserted.id);
+            ownerLinkWarning = null;
+          } else {
+            console.error("[OCR PDS] Failed to auto-create employee:", insertErr);
           }
         }
       }
+    }
+  }
+
+  if (!ownerCandidate) {
+    const inheritedOwnerContext = await inheritOwnerContextFromBatch();
+    if (inheritedOwnerContext?.ownerCandidate) {
+      ownerCandidate = inheritedOwnerContext.ownerCandidate;
+      ownerMethodUsed = inheritedOwnerContext.ownerMethodUsed;
+      ownerEmployeeId = inheritedOwnerContext.ownerEmployeeId;
+      if (!ownerLinkWarning && inheritedOwnerContext.ownerLinkWarning) {
+        ownerLinkWarning = inheritedOwnerContext.ownerLinkWarning;
+      }
+    }
+  }
+
+  if (ownerCandidate && !ownerEmployeeId && docTypeFinal !== "appointment" && docTypeFinal !== "pds") {
+    const resolved = await resolveEmployeeForOwnerCandidate(ownerCandidate);
+    if (resolved.id) {
+      ownerEmployeeId = String(resolved.id);
+    }
+    if (!ownerLinkWarning && resolved.warning) {
+      ownerLinkWarning = resolved.warning;
     }
   }
 
@@ -1164,9 +1506,8 @@ export async function POST(request: Request) {
   // employee_id must be set manually or via previous linking
 
   // Link document to employee_id if found
-  if (ownerEmployeeId && chosenOwnerPage?.page?.document_id) {
-    await supabase.from("employee_documents").update({ employee_id: ownerEmployeeId }).eq("id", chosenOwnerPage.page.document_id);
-    await supabase.from("extractions").update({ linked_employee_id: ownerEmployeeId } as any).eq("id", chosenExtractionId);
+  if (ownerEmployeeId) {
+    await linkResolvedEmployeeToUploadGroup(ownerEmployeeId);
   }
 
   // Photo extraction after ownerEmployeeId is computed (best-effort)
@@ -1624,6 +1965,14 @@ export async function POST(request: Request) {
       updated_by: updatedById,
     } as any)
     .eq("id", chosenExtractionId);
+
+  if (hasDetectedOwner) {
+    await propagateOwnerContextToBatch({
+      ownerCandidate,
+      ownerEmployeeId,
+      ownerLinkWarning,
+    });
+  }
 
   // Update employee_documents with doc_type for all documents in this extraction
   try {

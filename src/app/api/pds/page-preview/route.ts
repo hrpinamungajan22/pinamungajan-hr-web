@@ -12,6 +12,14 @@ async function downloadObject(client: any, bucket: string, path: string) {
   return Buffer.from(ab);
 }
 
+function normalizeRotationDegrees(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const normalized = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
+  if (normalized === 90 || normalized === 180 || normalized === 270) return normalized;
+  return 0;
+}
+
 export async function GET(request: Request) {
   try {
     const supabase = await createSupabaseServerClient();
@@ -25,6 +33,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const extractionId = String(url.searchParams.get("extraction_id") || "").trim();
     const pageIndex = Number(url.searchParams.get("page_index"));
+    const rotationDegrees = normalizeRotationDegrees(url.searchParams.get("rotation_degrees"));
 
     if (!extractionId) return new NextResponse("Missing extraction_id", { status: 400 });
     if (!Number.isFinite(pageIndex) || pageIndex < 0) return new NextResponse("Invalid page_index", { status: 400 });
@@ -104,7 +113,18 @@ export async function GET(request: Request) {
       skipPaperCrop: true,
     });
 
-    return new NextResponse(Buffer.from(norm.buffer), {
+    let outputBuffer = Buffer.from(norm.buffer);
+    if (rotationDegrees !== 0) {
+      let sharp: any;
+      try {
+        sharp = (await import("sharp")).default;
+      } catch {
+        return new NextResponse("sharp not installed", { status: 500 });
+      }
+      outputBuffer = await sharp(outputBuffer).rotate(rotationDegrees).png().toBuffer();
+    }
+
+    return new NextResponse(outputBuffer, {
       status: 200,
       headers: {
         "content-type": "image/png",

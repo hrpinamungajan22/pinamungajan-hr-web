@@ -122,14 +122,16 @@ export async function POST(request: Request) {
 
   const requestedUsername = normalizeUsername(String(body.username || ""));
   const ownerName = normalizeOwnerName(String(body.owner_name || ""));
-  const requestedPassword = String(body.password || "").trim();
-  const password = requestedPassword || `HrStaff!${randomBytes(5).toString("hex")}A1`;
+  const password = String(body.password || "").trim();
 
   if (!requestedUsername) {
     return jsonError("Username is required.", 400);
   }
   if (!ownerName) {
     return jsonError("Owner name is required.", 400);
+  }
+  if (!password) {
+    return jsonError("Password is required.", 400);
   }
 
   const admin = createSupabaseAdminClient();
@@ -145,7 +147,7 @@ export async function POST(request: Request) {
     const { error: updateErr } = await admin.auth.admin.updateUserById(existing.id, {
       app_metadata: { ...(existing.app_metadata || {}), role: "hr", approved: true },
       user_metadata: { ...(existing.user_metadata || {}), username: resolvedUsername, full_name: ownerName },
-      ...(requestedPassword ? { password } : {}),
+      password,
     });
     if (updateErr) return jsonError(updateErr.message, 400);
     return NextResponse.json({
@@ -153,7 +155,6 @@ export async function POST(request: Request) {
       mode: "updated",
       username: resolvedUsername,
       owner_name: ownerName,
-      generatedPassword: requestedPassword ? password : null,
     });
   }
 
@@ -173,7 +174,6 @@ export async function POST(request: Request) {
     mode: "created",
     username: desiredUsername,
     owner_name: ownerName,
-    generatedPassword: requestedPassword ? null : password,
   });
 }
 

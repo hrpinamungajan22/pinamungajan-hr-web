@@ -27,6 +27,26 @@ function normalizeDisplayName(e: any) {
   return `${ln}, ${fn}${mn ? ` ${mn}` : ""}`.trim();
 }
 
+function normalizeNameForMatch(s: string) {
+  return String(s || "")
+    .toUpperCase()
+    .replace(/[^A-Z\s\-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function middleNameCompatible(leftValue: unknown, rightValue: unknown) {
+  const left = normalizeNameForMatch(String(leftValue || ""));
+  const right = normalizeNameForMatch(String(rightValue || ""));
+  if (!left || !right) return true;
+  if (left === right) return true;
+  return left[0] === right[0] || left.startsWith(right) || right.startsWith(left);
+}
+
+function hasOwnerName(owner: { last_name: string | null; first_name: string | null }) {
+  return Boolean(String(owner.last_name || "").trim() && String(owner.first_name || "").trim());
+}
+
 function useDebouncedValue<T>(value: T, ms: number) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -40,6 +60,8 @@ export function CommitEmployeePanel({
   extractionId,
   initialLinkedEmployeeId,
   owner,
+  appointmentData,
+  onEmployeeSelected,
 }: {
   extractionId: string;
   initialLinkedEmployeeId: string | null;
@@ -48,7 +70,24 @@ export function CommitEmployeePanel({
     first_name: string | null;
     middle_name: string | null;
     date_of_birth: string | null;
+    gender?: string | null;
   };
+  appointmentData?: {
+    owner?: {
+      last_name: string | null;
+      first_name: string | null;
+      middle_name: string | null;
+      date_of_birth?: string | null;
+    } | null;
+    position_title?: string | null;
+    office_department?: string | null;
+    sg?: number | null;
+    step?: number | null;
+    monthly_salary?: number | null;
+    annual_salary?: number | null;
+    appointment_date?: string | null;
+  } | null;
+  onEmployeeSelected?: (employee: SearchEmployee) => void;
 }) {
   const router = useRouter();
 
@@ -58,6 +97,8 @@ export function CommitEmployeePanel({
 
   const [searchResults, setSearchResults] = useState<SearchEmployee[]>([]);
   const [searchState, setSearchState] = useState<"idle" | "loading" | "error">("idle");
+  const [autoSelectedEmployee, setAutoSelectedEmployee] = useState<SearchEmployee | null>(null);
+  const [selectedEmployeeRecord, setSelectedEmployeeRecord] = useState<SearchEmployee | null>(null);
 
   const [commitState, setCommitState] = useState<
     | { status: "idle" }
@@ -104,9 +145,80 @@ export function CommitEmployeePanel({
     };
   }, [debouncedSearch]);
 
+  const ownerSearchKey = useMemo(() => {
+    const last = String(owner.last_name || "").trim();
+    const first = String(owner.first_name || "").trim();
+    const middle = String(owner.middle_name || "").trim();
+    return [last, first, middle].filter(Boolean).join(" ");
+  }, [owner.first_name, owner.last_name, owner.middle_name]);
+
+  useEffect(() => {
+    if (!autoSelectedEmployee) return;
+    setSelectedEmployeeId(null);
+    setAutoSelectedEmployee(null);
+    setCommitState({ status: "idle" });
+  }, [ownerSearchKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (initialLinkedEmployeeId || selectedEmployeeId || !owner.last_name || !owner.first_name) return;
+
+      try {
+        const url = new URL(`${window.location.origin}/api/masterlist/employees`);
+        url.searchParams.set("q", ownerSearchKey);
+        url.searchParams.set("page", "1");
+        url.searchParams.set("pageSize", "10");
+
+        const res = await fetch(url.toString(), { credentials: "include" });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || res.statusText);
+        const json = JSON.parse(text) as { employees: SearchEmployee[] };
+        if (cancelled) return;
+
+        const ownerLast = normalizeNameForMatch(owner.last_name || "");
+        const ownerFirst = normalizeNameForMatch(owner.first_name || "");
+        const exactMatches = (json.employees || []).filter((employee) => {
+          if (normalizeNameForMatch(employee.last_name || "") !== ownerLast) return false;
+          if (normalizeNameForMatch(employee.first_name || "") !== ownerFirst) return false;
+          return middleNameCompatible(owner.middle_name, employee.middle_name);
+        });
+
+        if (exactMatches.length === 1) {
+          setSelectedEmployeeId(exactMatches[0].id);
+          setAutoSelectedEmployee(exactMatches[0]);
+          setSelectedEmployeeRecord(exactMatches[0]);
+        } else {
+          setAutoSelectedEmployee(null);
+        }
+      } catch {
+        if (cancelled) return;
+        setAutoSelectedEmployee(null);
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialLinkedEmployeeId, owner.first_name, owner.last_name, owner.middle_name, ownerSearchKey, selectedEmployeeId]);
+
   async function commit(opts?: { forceCreateNew?: boolean; employeeId?: string | null }) {
     try {
       setCommitState({ status: "saving" });
+
+      const effectiveOwner = hasOwnerName(owner)
+        ? owner
+        : selectedEmployeeRecord
+          ? {
+              last_name: selectedEmployeeRecord.last_name,
+              first_name: selectedEmployeeRecord.first_name,
+              middle_name: selectedEmployeeRecord.middle_name,
+              date_of_birth: selectedEmployeeRecord.date_of_birth,
+              gender: owner.gender ?? null,
+            }
+          : owner;
 
       const url = `${window.location.origin}/api/review/commit`;
       const res = await fetch(url, {
@@ -117,6 +229,8 @@ export function CommitEmployeePanel({
           extraction_id: extractionId,
           employee_id: opts?.employeeId ?? selectedEmployeeId ?? null,
           force_create_new: Boolean(opts?.forceCreateNew),
+          owner_override: effectiveOwner,
+          appointment_override: appointmentData ?? null,
         }),
       });
 
@@ -186,7 +300,10 @@ export function CommitEmployeePanel({
                   }`}
                   onClick={() => {
                     setSelectedEmployeeId(e.id);
+                    setAutoSelectedEmployee(null);
+                    setSelectedEmployeeRecord(e);
                     setCommitState({ status: "idle" });
+                    onEmployeeSelected?.(e);
                   }}
                 >
                   <span className="text-app-text">{normalizeDisplayName(e)}</span>
@@ -199,6 +316,11 @@ export function CommitEmployeePanel({
           <div className="mt-2 text-xs text-app-muted">
             Selected employee_id: <span className="font-mono text-app-text">{selectedEmployeeId || "(none)"}</span>
           </div>
+          {autoSelectedEmployee ? (
+            <div className="mt-1 text-xs text-app-success">
+              Auto-selected match: <span className="font-semibold">{normalizeDisplayName(autoSelectedEmployee)}</span>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -216,6 +338,8 @@ export function CommitEmployeePanel({
           type="button"
           onClick={() => {
             setSelectedEmployeeId(null);
+            setAutoSelectedEmployee(null);
+            setSelectedEmployeeRecord(null);
             setCommitState({ status: "idle" });
           }}
           className="rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-xs font-semibold text-app-text hover:bg-app-surface-muted"
@@ -267,7 +391,11 @@ export function CommitEmployeePanel({
                 <button
                   type="button"
                   className="inline-flex rounded-lg bg-app-primary px-2 py-1 text-xs font-semibold text-app-on-primary hover:bg-app-primary-hover"
-                  onClick={() => commit({ employeeId: c.id })}
+                  onClick={() => {
+                    setSelectedEmployeeRecord(c);
+                    onEmployeeSelected?.(c);
+                    commit({ employeeId: c.id });
+                  }}
                 >
                   Yes, link
                 </button>

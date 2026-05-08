@@ -26,7 +26,8 @@ export async function ReviewList() {
 
   const rows = (data || []) as (ExtractionRow & { batch_id?: string | null; document_set_id?: string | null; created_by?: string | null })[];
 
-  // Group by document_set_id (preferred), otherwise by batch_id.
+  // Group by batch_id first so bulk uploads stay together in the queue,
+  // otherwise fall back to document_set_id for single document groups.
   const byGroupKey = new Map<
     string,
     {
@@ -41,14 +42,6 @@ export async function ReviewList() {
     const ds = (r as any).document_set_id ? String((r as any).document_set_id) : "";
     const b = (r as any).batch_id ? String((r as any).batch_id) : "";
 
-    if (ds) {
-      const k = `ds:${ds}`;
-      const existing = byGroupKey.get(k);
-      if (existing) existing.group.push(r);
-      else byGroupKey.set(k, { kind: "document_set", id: ds, group: [r] });
-      continue;
-    }
-
     if (b) {
       const k = `batch:${b}`;
       const existing = byGroupKey.get(k);
@@ -57,17 +50,29 @@ export async function ReviewList() {
       continue;
     }
 
+    if (ds) {
+      const k = `ds:${ds}`;
+      const existing = byGroupKey.get(k);
+      if (existing) existing.group.push(r);
+      else byGroupKey.set(k, { kind: "document_set", id: ds, group: [r] });
+      continue;
+    }
+
     singles.push(r);
   }
 
   // Compute page/file counts from employee_documents.
-  const documentSetIds = Array.from(new Set(rows.map((r) => ((r as any).document_set_id ? String((r as any).document_set_id) : "")).filter(Boolean)));
-  const batchIds = Array.from(
+  const documentSetIds = Array.from(
     new Set(
       rows
-        .filter((r) => !(r as any).document_set_id)
-        .map((r) => ((r as any).batch_id ? String((r as any).batch_id) : ""))
+        .filter((r) => !(r as any).batch_id)
+        .map((r) => ((r as any).document_set_id ? String((r as any).document_set_id) : ""))
         .filter(Boolean)
+    )
+  );
+  const batchIds = Array.from(
+    new Set(
+      rows.map((r) => ((r as any).batch_id ? String((r as any).batch_id) : "")).filter(Boolean)
     )
   );
 

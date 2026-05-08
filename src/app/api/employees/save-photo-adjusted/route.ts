@@ -7,6 +7,14 @@ export const runtime = "nodejs";
 
 type NormBox = { x: number; y: number; w: number; h: number };
 
+function normalizeRotationDegrees(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const normalized = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
+  if (normalized === 90 || normalized === 180 || normalized === 270) return normalized;
+  return 0;
+}
+
 function clamp01(n: number) {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(1, n));
@@ -72,6 +80,7 @@ export async function POST(request: Request) {
     const pageIndex = Number(body.page_index);
     const roi = body.roi as NormBox;
     const force = Boolean(body.force);
+    const rotationDegrees = normalizeRotationDegrees(body.rotation_degrees);
 
     if (!extractionId) return new NextResponse("Missing extraction_id", { status: 400 });
     if (!employeeId) return new NextResponse("Missing employee_id", { status: 400 });
@@ -167,7 +176,12 @@ export async function POST(request: Request) {
       return new NextResponse("sharp not installed", { status: 500 });
     }
 
-    const meta = await sharp(norm.buffer).metadata();
+    let normalizedBuffer = Buffer.from(norm.buffer);
+    if (rotationDegrees !== 0) {
+      normalizedBuffer = await sharp(normalizedBuffer).rotate(rotationDegrees).png().toBuffer();
+    }
+
+    const meta = await sharp(normalizedBuffer).metadata();
     const w = Number(meta.width || 0);
     const h = Number(meta.height || 0);
     if (!w || !h) return new NextResponse("Invalid normalized image", { status: 500 });
@@ -177,7 +191,7 @@ export async function POST(request: Request) {
     const width = Math.max(1, Math.floor(safeRoi.w * w));
     const height = Math.max(1, Math.floor(safeRoi.h * h));
 
-    let img = sharp(norm.buffer).extract({ left, top, width, height });
+    let img = sharp(normalizedBuffer).extract({ left, top, width, height });
     try {
       img = img.trim({ threshold: 12 });
     } catch {
@@ -227,6 +241,7 @@ export async function POST(request: Request) {
             pageIndex,
             method: "manual",
             roi: safeRoi,
+            rotationDegrees,
             storedPath: destPath,
             bucketUsed: destBucket,
             faceDetected: true,
@@ -245,6 +260,7 @@ export async function POST(request: Request) {
       bucket: destBucket,
       path: destPath,
       roi: safeRoi,
+      rotationDegrees,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
