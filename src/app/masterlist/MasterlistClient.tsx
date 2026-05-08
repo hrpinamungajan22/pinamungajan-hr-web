@@ -63,6 +63,14 @@ export function MasterlistClient() {
 
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
 
+  function exportMasterlist() {
+    const url = new URL(`${window.location.origin}/api/masterlist/export`);
+    if (debouncedQ.trim()) {
+      url.searchParams.set("q", debouncedQ.trim());
+    }
+    window.location.href = url.toString();
+  }
+
   const pageCount = useMemo(() => {
     return Math.max(1, Math.ceil((state.total || 0) / pageSize));
   }, [state.total]);
@@ -138,6 +146,13 @@ export function MasterlistClient() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2 self-start lg:self-auto">
+            <button
+              type="button"
+              className="app-btn-primary px-3 py-2 text-sm"
+              onClick={exportMasterlist}
+            >
+              Export Excel
+            </button>
             <button
               type="button"
               className="app-btn-secondary px-3 py-2 text-sm"

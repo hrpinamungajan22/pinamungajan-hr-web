@@ -8,7 +8,7 @@ type AdminUser = {
   id: string;
   email?: string | null;
   phone?: string | null;
-  user_metadata?: { username?: string | null };
+  user_metadata?: { username?: string | null; full_name?: string | null };
   app_metadata?: { role?: string; approved?: boolean };
   last_sign_in_at?: string | null;
   identities?: Array<{ provider?: string }>;
@@ -16,10 +16,6 @@ type AdminUser = {
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
-}
-
-function isValidEmailFormat(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function normalizeUsername(value: string) {
@@ -40,6 +36,14 @@ function preferredUsername(user: AdminUser) {
   return normalizeUsername(String(user.user_metadata?.username || "")) || normalizeUsername(emailLocalPart(String(user.email || "")));
 }
 
+function normalizeOwnerName(value: string) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function preferredOwnerName(user: AdminUser) {
+  return normalizeOwnerName(String(user.user_metadata?.full_name || ""));
+}
+
 function uniqueUsername(base: string, users: AdminUser[], excludeUserId?: string) {
   const taken = new Set(
     users
@@ -52,6 +56,23 @@ function uniqueUsername(base: string, users: AdminUser[], excludeUserId?: string
   let i = 2;
   while (taken.has(`${root}${i}`)) i += 1;
   return `${root}${i}`;
+}
+
+function buildInternalEmail(username: string, users: AdminUser[]) {
+  const taken = new Set(
+    users
+      .filter((u) => String(u.id) !== "")
+      .map((u) => String(u.email || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const root = normalizeUsername(username) || `user${randomBytes(3).toString("hex")}`;
+  let candidate = `${root}@hr.local`;
+  let i = 2;
+  while (taken.has(candidate)) {
+    candidate = `${root}${i}@hr.local`;
+    i += 1;
+  }
+  return candidate;
 }
 
 async function requireAdmin() {
@@ -76,6 +97,7 @@ export async function GET() {
   const users = ((data?.users || []) as AdminUser[]).map((u) => ({
     id: u.id,
     username: preferredUsername(u) || null,
+    owner_name: preferredOwnerName(u) || null,
     email: u.email ?? null,
     phone: u.phone ?? null,
     role: String(u.app_metadata?.role || ""),
@@ -91,27 +113,23 @@ export async function POST(request: Request) {
   const guard = await requireAdmin();
   if (!guard.ok) return guard.response;
 
-  let body: { email?: string; username?: string; password?: string };
+  let body: { username?: string; owner_name?: string; password?: string };
   try {
     body = await request.json();
   } catch {
     return jsonError("Invalid JSON", 400);
   }
 
-  const email = String(body.email || "").trim().toLowerCase();
   const requestedUsername = normalizeUsername(String(body.username || ""));
+  const ownerName = normalizeOwnerName(String(body.owner_name || ""));
   const requestedPassword = String(body.password || "").trim();
   const password = requestedPassword || `HrStaff!${randomBytes(5).toString("hex")}A1`;
 
-  if (!email) {
-    return jsonError(
-      "Enter a work email address. HR staff accounts use real mailboxes so OTP and password reset can be delivered. " +
-        "Auto-generated placeholder addresses are reserved for masterlist (employee) records, not for auth users.",
-      400
-    );
+  if (!requestedUsername) {
+    return jsonError("Username is required.", 400);
   }
-  if (!isValidEmailFormat(email)) {
-    return jsonError("Invalid email address format.", 400);
+  if (!ownerName) {
+    return jsonError("Owner name is required.", 400);
   }
 
   const admin = createSupabaseAdminClient();
@@ -119,30 +137,33 @@ export async function POST(request: Request) {
   if (listErr) return jsonError(listErr.message, 400);
 
   const users = (listData?.users || []) as AdminUser[];
-  const desiredUsername = uniqueUsername(requestedUsername || emailLocalPart(email), users);
+  const desiredUsername = uniqueUsername(requestedUsername, users);
+  const existing = users.find((u) => preferredUsername(u) === requestedUsername);
 
-  const existing = users.find((u) => String(u.email || "").toLowerCase() === email);
   if (existing) {
+    const resolvedUsername = preferredUsername(existing) || desiredUsername;
     const { error: updateErr } = await admin.auth.admin.updateUserById(existing.id, {
       app_metadata: { ...(existing.app_metadata || {}), role: "hr", approved: true },
-      user_metadata: { ...(existing.user_metadata || {}), username: preferredUsername(existing) || desiredUsername },
+      user_metadata: { ...(existing.user_metadata || {}), username: resolvedUsername, full_name: ownerName },
       ...(requestedPassword ? { password } : {}),
     });
     if (updateErr) return jsonError(updateErr.message, 400);
     return NextResponse.json({
       ok: true,
       mode: "updated",
-      email,
-      username: preferredUsername(existing) || desiredUsername,
+      username: resolvedUsername,
+      owner_name: ownerName,
       generatedPassword: requestedPassword ? password : null,
     });
   }
+
+  const email = buildInternalEmail(desiredUsername, users);
 
   const { error: createErr } = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
-    user_metadata: { username: desiredUsername },
+    user_metadata: { username: desiredUsername, full_name: ownerName },
     app_metadata: { role: "hr", approved: true },
   });
   if (createErr) return jsonError(createErr.message, 400);
@@ -150,8 +171,8 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     mode: "created",
-    email,
     username: desiredUsername,
+    owner_name: ownerName,
     generatedPassword: requestedPassword ? null : password,
   });
 }

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 type StaffRow = {
   id: string;
   username: string | null;
+  owner_name: string | null;
   email: string | null;
   phone: string | null;
   role: string;
@@ -13,10 +14,8 @@ type StaffRow = {
   providers: string[];
 };
 
-function staffIdentityLabel(r: StaffRow): string {
-  if (r.email) return r.email;
-  if (r.phone) return `Phone: ${r.phone}`;
-  return "—";
+function staffSortLabel(r: StaffRow): string {
+  return String(r.username || r.owner_name || r.email || r.phone || "").toLowerCase();
 }
 
 async function readJsonError(res: Response, text: string): Promise<string> {
@@ -32,7 +31,7 @@ async function readJsonError(res: Response, text: string): Promise<string> {
 export function StaffManagementClient() {
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
+  const [ownerName, setOwnerName] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -44,9 +43,7 @@ export function StaffManagementClient() {
     const json = JSON.parse(text) as { users: StaffRow[] };
     const list = json.users || [];
     setRows(
-      list.sort((a, b) =>
-        staffIdentityLabel(a).toLowerCase().localeCompare(staffIdentityLabel(b).toLowerCase())
-      )
+      list.sort((a, b) => staffSortLabel(a).localeCompare(staffSortLabel(b)))
     );
   }
 
@@ -62,23 +59,26 @@ export function StaffManagementClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username: username.trim(), email: email.trim(), password }),
+        body: JSON.stringify({ username: username.trim(), owner_name: ownerName.trim(), password }),
       });
       const text = await res.text();
       if (!res.ok) throw new Error(await readJsonError(res, text));
       const json = JSON.parse(text) as {
         mode: string;
-        email?: string;
         username?: string;
+        owner_name?: string;
         generatedPassword: string | null;
       };
       setUsername("");
-      setEmail("");
+      setOwnerName("");
       setPassword("");
       const lines: string[] = [];
       lines.push(`Staff ${json.mode}.`);
       if (json.username) {
         lines.push(`Username: ${json.username}`);
+      }
+      if (json.owner_name) {
+        lines.push(`Owner: ${json.owner_name}`);
       }
       if (json.generatedPassword) {
         lines.push(`Password (copy now): ${json.generatedPassword}`);
@@ -137,7 +137,7 @@ export function StaffManagementClient() {
     <section className="app-card p-6 sm:p-8">
       <h2 className="text-base font-semibold text-app-text">HR staff accounts</h2>
       <p className="app-prose-muted mt-1">
-        Create HR accounts, assign usernames, approve pending sign-ups, or remove access.
+        Create HR accounts, set the account owner name, approve pending sign-ups, or remove access.
       </p>
 
       <div className="mt-6 grid gap-3 sm:grid-cols-4">
@@ -149,9 +149,9 @@ export function StaffManagementClient() {
           autoComplete="off"
         />
         <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Work email (required)"
+          value={ownerName}
+          onChange={(e) => setOwnerName(e.target.value)}
+          placeholder="Owner name"
           className="app-input"
           autoComplete="off"
         />
@@ -163,7 +163,7 @@ export function StaffManagementClient() {
           autoComplete="new-password"
         />
         <button
-          disabled={loading || !email.trim()}
+          disabled={loading || !username.trim() || !ownerName.trim()}
           onClick={createOrPromote}
           className="app-btn-primary"
         >
@@ -172,7 +172,7 @@ export function StaffManagementClient() {
       </div>
 
       <p className="app-prose-muted mt-3 text-xs">
-        Users now sign in with <span className="font-medium text-app-text">username and password</span>. If you leave the username blank, it defaults to the email name before <span className="font-medium text-app-text">@</span>.
+        Users now sign in with <span className="font-medium text-app-text">username and password</span>. The account owner name is stored for display in this admin panel.
       </p>
 
       {message ? (
@@ -184,7 +184,7 @@ export function StaffManagementClient() {
           <thead className="app-table-head">
             <tr>
               <th className="px-3 py-3 text-left">Username</th>
-              <th className="px-3 py-3 text-left">Email / phone</th>
+              <th className="px-3 py-3 text-left">Owner name</th>
               <th className="px-3 py-3 text-left">Role</th>
               <th className="px-3 py-3 text-left">Approved</th>
               <th className="px-3 py-3 text-left">Providers</th>
@@ -196,15 +196,7 @@ export function StaffManagementClient() {
             {rows.map((r) => (
               <tr key={r.id} className="text-app-text">
                 <td className="px-3 py-2.5">{r.username || "—"}</td>
-                <td className="px-3 py-2.5">
-                  {r.email ? (
-                    <span>{r.email}</span>
-                  ) : r.phone ? (
-                    <span className="text-app-muted">{staffIdentityLabel(r)}</span>
-                  ) : (
-                    <span className="text-app-muted">—</span>
-                  )}
-                </td>
+                <td className="px-3 py-2.5">{r.owner_name || "—"}</td>
                 <td className="px-3 py-2.5">{r.role || "none"}</td>
                 <td className="px-3 py-2.5">{r.approved ? "yes" : "no"}</td>
                 <td className="px-3 py-2.5">{r.providers.join(", ") || "—"}</td>

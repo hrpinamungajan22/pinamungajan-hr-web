@@ -4,9 +4,7 @@ import {
   PlusCircle,
   ClipboardCheck,
   Users,
-  FileText,
   ArrowRight,
-  ExternalLink,
   Sparkles,
 } from "lucide-react";
 
@@ -90,43 +88,6 @@ export default function Home() {
                 </span>
               </Link>
             </li>
-          </ul>
-        </section>
-
-        <section className="app-card p-6 sm:p-8">
-          <div className="flex items-start gap-3">
-            <FileText className="mt-0.5 h-5 w-5 shrink-0 text-app-muted" aria-hidden />
-            <div>
-              <h3 className="text-base font-semibold text-app-text">Printable blank forms (CS Form 212)</h3>
-              <p className="app-prose-muted mt-1 max-w-2xl">
-                Official PDS pages open in a new tab. For best print quality, use the browser’s print dialog (Ctrl+P or
-                Cmd+P).
-              </p>
-            </div>
-          </div>
-
-          <ul className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              { href: "/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet.pdf", label: "PDS page 1" },
-              { href: "/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet2.pdf", label: "PDS page 2" },
-              { href: "/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet3.pdf", label: "PDS page 3" },
-              { href: "/guides/CS-Form-No.-212-Revised-2025-Personal-Data-Sheet4.pdf", label: "PDS page 4" },
-            ].map((item) => (
-              <li key={item.href}>
-                <a
-                  className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-app-border bg-app-surface-muted px-4 py-3 text-sm font-medium text-app-text transition-colors hover:border-app-primary/35 hover:bg-app-surface"
-                  href={item.href}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <FileText className="h-4 w-4 shrink-0 text-app-danger" aria-hidden />
-                    <span className="truncate">{item.label}</span>
-                  </span>
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-app-muted" aria-hidden />
-                </a>
-              </li>
-            ))}
           </ul>
         </section>
       </div>

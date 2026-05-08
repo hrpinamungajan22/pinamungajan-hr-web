@@ -29,6 +29,8 @@ export function AdminActivityClient() {
     | { status: "ok"; extractions: ExRow[]; employees: EmpRow[] }
   >({ status: "loading" });
 
+  const extractionRowClassName = "grid grid-cols-[minmax(0,2fr)_0.9fr_1.1fr_1.1fr_1.3fr]";
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -66,7 +68,7 @@ export function AdminActivityClient() {
         <div className="app-table-wrap mt-4 overflow-x-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="app-table-head">
-              <tr>
+              <tr className={extractionRowClassName}>
                 <th className="px-3 py-3">File</th>
                 <th className="px-3 py-3">Status</th>
                 <th className="px-3 py-3">Started by</th>
@@ -74,16 +76,16 @@ export function AdminActivityClient() {
                 <th className="px-3 py-3">Created</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-app-border">
+            <tbody className="block max-h-[264px] overflow-y-auto divide-y divide-app-border">
               {state.extractions.length === 0 ? (
-                <tr>
+                <tr className={extractionRowClassName}>
                   <td colSpan={5} className="px-3 py-8 text-center text-app-muted">
                     No extractions yet.
                   </td>
                 </tr>
               ) : (
                 state.extractions.map((r) => (
-                  <tr key={r.id} className="text-app-text">
+                  <tr key={r.id} className={`${extractionRowClassName} text-app-text`}>
                     <td className="max-w-[200px] truncate px-3 py-2.5">{r.original_filename || "—"}</td>
                     <td className="px-3 py-2.5 text-app-muted">{r.status}</td>
                     <td className="px-3 py-2.5 text-app-muted">{r.created_by_email || "—"}</td>
